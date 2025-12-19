@@ -53,7 +53,7 @@ const config = {
 
     // Logging
     logging: {
-        level: process.env.LOG_LEVEL || 'error',
+        level: process.env.LOG_LEVEL || 'info',
         dir: process.env.LOG_DIR || './logs',
         maxFiles: '30d', // Keep logs for 30 days
         maxSize: '20m',  // Max 20MB per file
