@@ -13,7 +13,11 @@ const requiredEnvVars = [
     'ESL_PORT',
     'ESL_PASSWORD',
     'MONGO_URL',
-    'APP_PORT'
+    'APP_PORT',
+    'RABBITMQ_HOST',
+    'RABBITMQ_PORT',
+    'RABBITMQ_USER',
+    'RABBITMQ_PASSWORD'
 ];
 
 const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
@@ -74,6 +78,21 @@ const config = {
     // Security
     security: {
         corsOrigin: process.env.CORS_ORIGIN || '*',
+    },
+
+    // RabbitMQ
+    rabbitmq: {
+        host: process.env.RABBITMQ_HOST,
+        port: parseInt(process.env.RABBITMQ_PORT, 10) || 5672,
+        user: process.env.RABBITMQ_USER,
+        password: process.env.RABBITMQ_PASSWORD,
+        queue: process.env.RABBITMQ_QUEUE || 'cdr_operations',
+        deadLetterQueue: process.env.RABBITMQ_DLQ || 'cdr_operations_dlq',
+        deadLetterExchange: process.env.RABBITMQ_DLX || 'cdr_operations_dlx',
+        maxRetries: parseInt(process.env.RABBITMQ_MAX_RETRIES, 10) || 3,
+        retryDelay: parseInt(process.env.RABBITMQ_RETRY_DELAY, 10) || 5000, // 5 seconds
+        maxRetryDelay: parseInt(process.env.RABBITMQ_MAX_RETRY_DELAY, 10) || 60000, // 60 seconds
+        messageTtl: parseInt(process.env.RABBITMQ_MESSAGE_TTL, 10) || 86400000, // 24 hours
     },
 };
 

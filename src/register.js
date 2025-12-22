@@ -3,8 +3,7 @@
  * Checks if a user is registered on FreeSWITCH via ESL
  * Usage: node src/register.js <username> <realm>
  *
- * CORRECTED VERSION - Matches Python behavior exactly
- */
+  */
 
 import esl from "modesl";
 import config from "./config.js";

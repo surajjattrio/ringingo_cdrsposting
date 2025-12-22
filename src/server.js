@@ -21,6 +21,8 @@ import config from "./config.js";
 import logger from "./logger.js";
 import { connectMongoDB, getCollections, closeMongoDB } from "./database.js";
 import { checkRegistration } from "./register.js";
+import rabbitMQ from "./rabbitmq.js";
+import { wrapCollectionsWithQueue } from "./mongodb-queue-wrapper.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -1892,7 +1894,15 @@ async function startServer() {
   try {
     // Connect to MongoDB
     await connectMongoDB();
-    collections = getCollections();
+    const rawCollections = getCollections();
+
+    // Connect to RabbitMQ
+    await rabbitMQ.connect();
+    logger.success('✅ RabbitMQ connection established');
+
+    // Wrap collections with queue functionality
+    collections = wrapCollectionsWithQueue(rawCollections);
+    logger.success('✅ Collections wrapped with queue functionality');
 
     // Start Express server
     const server = app.listen(config.app.port, () => {
@@ -1907,6 +1917,8 @@ async function startServer() {
 
       server.close(async () => {
         logger.info("HTTP server closed");
+        await rabbitMQ.close();
+        logger.info("RabbitMQ connection closed");
         await closeMongoDB();
         logger.info("MongoDB connection closed");
         process.exit(0);

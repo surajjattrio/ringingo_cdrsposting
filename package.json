@@ -1,42 +1,37 @@
 {
-  "name": "freeswitch-cdr-system",
+  "name": "freeswitch-cdr-rabbitmq",
   "version": "1.0.0",
-  "description": "FreeSWITCH CDR Processing System with Registration Management",
   "type": "module",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js",
-    "register": "node src/register.js",
+    "consumer": "node consumer-service.js",
+    "dev": "NODE_ENV=development node server.js",
+    "dev:consumer": "NODE_ENV=development node consumer-service.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
     "freeswitch",
     "cdr",
-    "voip",
-    "pbx"
+    "rabbitmq",
+    "mongodb",
+    "queue"
   ],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "amqplib": "^0.10.3",
     "express": "^4.18.2",
-    "modesl": "^1.1.10",
+    "modesl": "^1.1.9",
     "mongodb": "^6.3.0",
     "dotenv": "^16.3.1",
     "winston": "^3.11.0",
     "winston-daily-rotate-file": "^4.7.1",
     "uuid": "^9.0.1",
     "axios": "^1.6.2",
-    "nodemailer": "^6.9.7",
-    "cors": "^2.8.5",
+    "compression": "^1.7.4",
     "helmet": "^7.1.0",
-    "compression": "^1.7.4"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.2"
-  },
-  "engines": {
-    "node": ">=16.0.0",
-    "npm": ">=8.0.0"
+    "cors": "^2.8.5",
+    "nodemailer": "^6.9.7"
   }
 }
