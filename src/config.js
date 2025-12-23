@@ -59,8 +59,8 @@ const config = {
     logging: {
         level: process.env.LOG_LEVEL || 'info',
         dir: process.env.LOG_DIR || './logs',
-        maxFiles: '30d', // Keep logs for 30 days
-        maxSize: '20m',  // Max 20MB per file
+        maxFiles: '10d', // Keep logs for 10 days
+        maxSize: '200m',  // Max 200MB per file
     },
 
     // Email
