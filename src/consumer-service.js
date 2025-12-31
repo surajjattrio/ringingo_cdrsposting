@@ -1,6 +1,7 @@
 /**
- * Consumer Service
+ * Consumer Service with Webhook Support
  * Standalone service to consume and process MongoDB operations from RabbitMQ
+ * Delivers CDRs to configured webhooks
  * Run this as a separate process: node consumer-service.js
  */
 
@@ -8,9 +9,10 @@ import logger from "./logger.js";
 import { connectMongoDB, closeMongoDB } from "./database.js";
 import rabbitMQ from "./rabbitmq.js";
 import consumer from "./consumer.js";
+import webhookManager from "./webhook/webhook-manager.js";
 
 /**
- * Start consumer service
+ * Start consumer service with webhook support
  */
 async function startConsumerService() {
   try {
@@ -26,13 +28,26 @@ async function startConsumerService() {
     await rabbitMQ.connect();
     logger.success("✅ RabbitMQ connection established");
 
+    // Initialize webhook manager
+    await webhookManager.initialize();
+    logger.success("✅ Webhook manager initialized");
+
     // Start consuming messages
     await consumer.start();
     logger.success("✅ Consumer started successfully");
 
     logger.info("==============================");
     logger.info("[CONSUMER_SERVICE] Consumer Service Running");
+    logger.info("  - Processing MongoDB operations");
+    logger.info("  - Delivering CDRs to webhooks");
+    logger.info(`  - Active webhooks: ${webhookManager.getActiveWebhooks().length}`);
     logger.info("==============================\n");
+
+    // Reload webhooks periodically (every 30 minutes)
+    const webhookReloadInterval = setInterval(async () => {
+      logger.info('[CONSUMER_SERVICE] Reloading webhooks...');
+      await webhookManager.reloadWebhooks();
+    }, 1800000); // 30 min
 
     // Graceful shutdown
     const gracefulShutdown = async (signal) => {
@@ -41,6 +56,9 @@ async function startConsumerService() {
         `[CONSUMER_SERVICE] ${signal} received, shutting down gracefully...`
       );
       logger.info("==============================");
+
+      // Clear intervals
+      clearInterval(webhookReloadInterval);
 
       await consumer.stop();
       logger.info("Consumer stopped");

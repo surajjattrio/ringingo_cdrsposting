@@ -23,6 +23,7 @@ import { connectMongoDB, getCollections, closeMongoDB } from "./database.js";
 import { checkRegistration } from "./register.js";
 import rabbitMQ from "./rabbitmq.js";
 import { wrapCollectionsWithQueue } from "./mongodb-queue-wrapper.js";
+import webhookRoutes from './webhook/webhook-routes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -43,6 +44,7 @@ app.use(express.json({ limit: config.app.maxRequestSize }));
 app.use(
   express.urlencoded({ extended: true, limit: config.app.maxRequestSize })
 );
+app.use('/api', webhookRoutes);
 
 /**
  * Helper function to check if string starts with number
@@ -723,7 +725,7 @@ app.post("/cdrs", async (req, res) => {
     logger.info("==============================");
 
     const data = req.body;
-    
+    logger.info("CDR-DATA....",data);
     if (!data || !data.variables) {
       logger.error("[CDR_PROCESSING] Invalid or missing variables data");
       return res
@@ -1318,7 +1320,7 @@ app.post("/cdrs", async (req, res) => {
             });
           } catch (webhookError) {
             logger.error("[CDR] Webhook post failed", {
-              error: webhookError.message,
+              error: webhookError,
             });
           }
         }
@@ -1621,7 +1623,7 @@ app.post("/cdrs", async (req, res) => {
 
     // Handle PBX features (ring group, call queue) - extra entries
     if (
-      !incomingExtraEntryFlag &&
+      // !incomingExtraEntryFlag &&
       ["ring_group", "call_queue"].includes(pbxFeature)
     ) {
       logger.debug("[CDR] PBX Feature processing", { pbxFeature });
@@ -1933,7 +1935,7 @@ async function startServer() {
     logger.success('✅ Collections wrapped with queue functionality');
 
     // Start Express server
-    const server = app.listen(config.app.port, () => {
+    const server = app.listen(config.app.port,'0.0.0.0', () => {
       logger.success(`🚀 CDR Server running on port ${config.app.port}`);
       logger.info(`Environment: ${config.app.env}`);
       logger.info(`Log directory: ${config.logging.dir}`);
