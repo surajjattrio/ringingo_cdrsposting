@@ -199,7 +199,7 @@ class MongoDBConsumer {
             cdr.uuid, // CDR UUID to fetch later
             collection, // Collection name
             tenantUuid, // Tenant filter
-            300000 // 5 minutes in milliseconds
+            60000 // 1 minutes in milliseconds
           )
           .catch((error) => {
             logger.error("[CONSUMER] Failed to schedule webhook delivery", {

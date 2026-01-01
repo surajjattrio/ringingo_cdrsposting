@@ -118,7 +118,7 @@ class WebhookManager {
    * @param {string} cdrUuid - CDR UUID to fetch
    * @param {string} collectionName - Collection to fetch from
    * @param {string} tenantUuid - Optional tenant filter
-   * @param {number} delayMs - Delay in milliseconds (default 5 minutes)
+   * @param {number} delayMs - Delay in milliseconds (default 1 minutes)
    */
   async scheduleDelayedDelivery(cdrUuid, collectionName, tenantUuid = null, delayMs = 300000) {
     try {
