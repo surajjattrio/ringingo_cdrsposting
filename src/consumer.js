@@ -10,6 +10,43 @@ import logger from "./logger.js";
 import { getDatabase } from "./database.js";
 import webhookManager from "./webhook/webhook-manager.js";
 
+/**
+ * Convert date strings to Date objects for MongoDB
+ */
+function convertDates(data) {
+  if (!data || typeof data !== "object") return data;
+  
+  if (Array.isArray(data)) {
+    return data.map(item => convertDates(item));
+  }
+  
+  const converted = {};
+  const dateFields = [
+    "createdAt",      // Main date field used in Python
+    "updatedAt",      // Update timestamp
+    "timestamp",      // Generic timestamp
+    "created_at",     // Snake case variant (if used)
+    "updated_at"      // Snake case variant (if used)
+  ];
+  
+  for (const [key, value] of Object.entries(data)) {
+    if (dateFields.includes(key) && typeof value === "string") {
+      try {
+        const date = new Date(value);
+        converted[key] = isNaN(date.getTime()) ? value : date;
+      } catch {
+        converted[key] = value;
+      }
+    } else if (value && typeof value === "object") {
+      converted[key] = convertDates(value);
+    } else {
+      converted[key] = value;
+    }
+  }
+  
+  return converted;
+}
+
 class MongoDBConsumer {
   constructor() {
     this.isConsuming = false;
@@ -121,16 +158,16 @@ class MongoDBConsumer {
 
     switch (operation) {
       case "insertOne":
-        return await collection.insertOne(args[0], options);
+        return await collection.insertOne(convertDates(args[0]), options);
 
       case "insertMany":
-        return await collection.insertMany(args[0], options);
+        return await collection.insertMany(convertDates(args[0]), options);
 
       case "updateOne":
-        return await collection.updateOne(args[0], args[1], options);
+        return await collection.updateOne(args[0], convertDates(args[1]), options);
 
       case "updateMany":
-        return await collection.updateMany(args[0], args[1], options);
+        return await collection.updateMany(args[0], convertDates(args[1]), options);
 
       case "deleteOne":
         return await collection.deleteOne(args[0], options);
@@ -139,13 +176,13 @@ class MongoDBConsumer {
         return await collection.deleteMany(args[0], options);
 
       case "replaceOne":
-        return await collection.replaceOne(args[0], args[1], options);
+        return await collection.replaceOne(args[0], convertDates(args[1]), options);
 
       case "findOneAndUpdate":
-        return await collection.findOneAndUpdate(args[0], args[1], options);
+        return await collection.findOneAndUpdate(args[0], convertDates(args[1]), options);
 
       case "findOneAndReplace":
-        return await collection.findOneAndReplace(args[0], args[1], options);
+        return await collection.findOneAndReplace(args[0], convertDates(args[1]), options);
 
       case "findOneAndDelete":
         return await collection.findOneAndDelete(args[0], options);
