@@ -24,6 +24,7 @@ import { checkRegistration } from "./register.js";
 import rabbitMQ from "./rabbitmq.js";
 import { wrapCollectionsWithQueue } from "./mongodb-queue-wrapper.js";
 import webhookRoutes from './webhook/webhook-routes.js';
+import googleDriveUploader from './google-drive-uploader.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -1461,7 +1462,41 @@ app.post("/cdrs", async (req, res) => {
 
       await collections.recordings.insertOne(insertRecordingJson);
       logger.debug("[CDR] Recording Insert", { insertRecordingJson });
+
+  // Upload recording to Google Drive (synchronous)
+  if (config.googleDrive.enabled) {
+    try {
+      logger.info("[CDR_PROCESSING] Starting Google Drive upload", {
+        recordingPath,
+        cdrUuid: bridgeUuid,
+      });
+
+      const cdrData = {
+        uuid: bridgeUuid,
+        user_uuid: userUuid,
+        callstart: callstart,
+      };
+
+      const uploadResult = await googleDriveUploader.processRecording(
+        insertRecordingJson,
+        cdrData
+      );
+
+      if (uploadResult) {
+        logger.success("[CDR_PROCESSING] Google Drive upload completed", {
+          fileId: uploadResult.fileId,
+          publicUrl: uploadResult.publicUrl,
+        });
+      } else {
+        logger.warn("[CDR_PROCESSING] Google Drive upload failed (CDR processing continues)");
+      }
+    } catch (uploadError) {
+      logger.error("[CDR_PROCESSING] Google Drive upload error (CDR processing continues)", {
+        error: uploadError.message,
+      });
     }
+  }
+}
 
     // Update CDR summary
     const todayDate = new Date().toISOString().slice(0, 10);
@@ -1586,7 +1621,40 @@ app.post("/cdrs", async (req, res) => {
         logger.debug("[CDR] Second Leg Recording Insert", {
           insertSecondLegRecordingJson,
         });
+  // Upload recording to Google Drive (synchronous)
+  if (config.googleDrive.enabled) {
+    try {
+      logger.info("[CDR_PROCESSING] Starting Google Drive upload (Second Leg)", {
+        recordingPath,
+        cdrUuid: bridgeUuid + "-receiver",
+      });
+
+      const cdrData = {
+        uuid: bridgeUuid + "-receiver",
+        user_uuid: receiverExtensionUuid,
+        callstart: callstart,
+      };
+
+      const uploadResult = await googleDriveUploader.processRecording(
+        insertSecondLegRecordingJson,
+        cdrData
+      );
+
+      if (uploadResult) {
+        logger.success("[CDR_PROCESSING] Google Drive upload completed (Second Leg)", {
+          fileId: uploadResult.fileId,
+          publicUrl: uploadResult.publicUrl,
+        });
+      } else {
+        logger.warn("[CDR_PROCESSING] Google Drive upload failed (Second Leg)");
       }
+    } catch (uploadError) {
+      logger.error("[CDR_PROCESSING] Google Drive upload error (Second Leg)", {
+        error: uploadError.message,
+      });
+    }
+  }
+}
 
       const todayDateSecondLeg = new Date().toISOString().slice(0, 10);
       const summaryFilterSecondLeg = {
@@ -1854,7 +1922,41 @@ app.post("/cdrs", async (req, res) => {
           logger.debug("[CDR_PROCESSING] Extra PBX Recording Insert", {
             insertRecordingJson,
           });
-        }
+
+  // Upload recording to Google Drive (synchronous)
+  if (config.googleDrive.enabled) {
+    try {
+      logger.info("[CDR_PROCESSING] Starting Google Drive upload (PBX Feature)", {
+        recordingPath,
+        cdrUuid: bridgeUuid + "-" + pbxFeature,
+      });
+
+      const cdrData = {
+        uuid: bridgeUuid + "-" + pbxFeature,
+        user_uuid: userUuid,
+        callstart: callstart,
+      };
+
+      const uploadResult = await googleDriveUploader.processRecording(
+        insertRecordingJson,
+        cdrData
+      );
+
+      if (uploadResult) {
+        logger.success("[CDR_PROCESSING] Google Drive upload completed (PBX Feature)", {
+          fileId: uploadResult.fileId,
+          publicUrl: uploadResult.publicUrl,
+        });
+      } else {
+        logger.warn("[CDR_PROCESSING] Google Drive upload failed (PBX Feature)");
+      }
+    } catch (uploadError) {
+      logger.error("[CDR_PROCESSING] Google Drive upload error (PBX Feature)", {
+        error: uploadError.message,
+      });
+    }
+  }
+}
 
         const todayDateSecond = new Date().toISOString().slice(0, 10);
         const summaryFilterPbx = {
@@ -1933,6 +2035,19 @@ async function startServer() {
     // Wrap collections with queue functionality
     collections = wrapCollectionsWithQueue(rawCollections);
     logger.success('✅ Collections wrapped with queue functionality');
+
+    // Initialize Google Drive uploader (if enabled)
+    if (config.googleDrive.enabled) {
+      try {
+        await googleDriveUploader.initialize();
+        logger.success('✅ Google Drive uploader initialized');
+      } catch (error) {
+        logger.error('❌ Google Drive initialization failed', {
+          error: error.message,
+        });
+        logger.warn('⚠️  Continuing without Google Drive support');
+      }
+    }
 
     // Start Express server
     const server = app.listen(config.app.port,'0.0.0.0', () => {
