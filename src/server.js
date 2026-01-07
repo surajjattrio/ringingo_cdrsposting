@@ -743,6 +743,10 @@ app.post("/cdrs", async (req, res) => {
     }
 
     variablesValue = data.variables;
+
+    const feedbackScore = variablesValue.ivr_feedback_score || "N/A";
+    logger.debug("[CDR] Feedback Score Received", { feedbackScore });
+
     logger.debug("[CDR] Variables received", {
       variablesCount: Object.keys(variablesValue).length,
     });
@@ -1296,6 +1300,7 @@ app.post("/cdrs", async (req, res) => {
         waiting_time: waitsecond,
         total_duration: totalduration,
         ringing_time: ringingsecond,
+        ivr_feedback_score: feedbackScore,
       };
 
       await collections.inboundCdrs.insertOne(insertInboundCdrJson);
@@ -1447,6 +1452,7 @@ app.post("/cdrs", async (req, res) => {
         waiting_time: waitsecond,
         total_duration: totalduration,
         ringing_time: ringingsecond,
+        ivr_feedback_score: feedbackScore,
       };
 
       logger.debug(
@@ -1923,6 +1929,7 @@ app.post("/cdrs", async (req, res) => {
           waiting_time: waitsecond,
           total_duration: totalduration,
           ringing_time: ringingsecond,
+          ivr_feedback_score: feedbackScore,
         };
 
         await collections.cdrs.insertOne(insertCdrJson);
