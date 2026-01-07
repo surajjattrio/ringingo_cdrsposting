@@ -2,7 +2,6 @@
  * Google Drive Settings Management
  * Stores and manages Google Drive OAuth credentials in database
  * Supports tenant-specific or global configurations
- * Data stored directly without encryption
  */
 
 import { getDatabase } from "../database.js";
@@ -44,7 +43,7 @@ class GoogleDriveSettingsManager {
 
       // Check if settings already exist for this tenant/global
       const existingSettings = await collection.findOne({
-        tenant_uuid: settingsData.tenant_uuid || null,
+        tenant_uuid: settingsData.tenant_uuid 
       });
 
       if (existingSettings) {

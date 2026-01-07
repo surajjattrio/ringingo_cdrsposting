@@ -94,16 +94,6 @@ const config = {
         maxRetryDelay: parseInt(process.env.RABBITMQ_MAX_RETRY_DELAY, 10) || 60000, // 60 seconds
         messageTtl: parseInt(process.env.RABBITMQ_MESSAGE_TTL, 10) || 86400000, // 24 hours
     },
-
-    // Google Drive (OAuth)
-    googleDrive: {
-    enabled: process.env.GOOGLE_DRIVE_ENABLED === 'true',
-    clientId: process.env.GOOGLE_CLIENT_ID,
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    redirectUri: process.env.GOOGLE_REDIRECT_URI,
-    refreshToken: process.env.GOOGLE_REFRESH_TOKEN,
-    rootFolderId: process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID,
-},
 };
 
 // Validate MongoDB URL format

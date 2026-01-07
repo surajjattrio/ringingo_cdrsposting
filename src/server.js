@@ -26,6 +26,7 @@ import { wrapCollectionsWithQueue } from "./mongodb-queue-wrapper.js";
 import webhookRoutes from "./webhook/webhook-routes.js";
 import googleDriveRoutes from "./googledrive/google-drive-routes.js";
 import googleDriveUploader from "./google-drive-uploader.js";
+import googleDriveSettingsManager from "./googledrive/google-drive-settings-manager.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -1485,44 +1486,46 @@ app.post("/cdrs", async (req, res) => {
       await collections.recordings.insertOne(insertRecordingJson);
       logger.debug("[CDR] Recording Insert", { insertRecordingJson });
 
-      // Upload recording to Google Drive (synchronous)
-      if (config.googleDrive.enabled) {
-        try {
-          logger.info("[CDR_PROCESSING] Starting Google Drive upload", {
-            recordingPath,
-            cdrUuid: bridgeUuid,
-          });
+      // Upload recording to Google Drive
+try {
+  const driveSettings = await googleDriveSettingsManager.getSettings(tenantUuid);
+  
+  if (driveSettings && driveSettings.enabled) {
+    logger.info("[CDR_PROCESSING] Starting Google Drive upload", {
+      recordingPath,
+      cdrUuid: bridgeUuid,
+      tenant_uuid: tenantUuid,
+    });
 
-          const cdrData = {
-            uuid: bridgeUuid,
-            user_uuid: userUuid,
-            callstart: callstart,
-          };
+    const cdrData = {
+      uuid: bridgeUuid,
+      user_uuid: userUuid,
+      tenant_uuid: tenantUuid,
+      callstart: callstart,
+      createdAt: createdAt,
+    };
 
-          const uploadResult = await googleDriveUploader.processRecording(
-            insertRecordingJson,
-            cdrData
-          );
+    const uploadResult = await googleDriveUploader.processRecording(
+      insertRecordingJson,
+      cdrData
+    );
 
-          if (uploadResult) {
-            logger.success("[CDR_PROCESSING] Google Drive upload completed", {
-              fileId: uploadResult.fileId,
-              publicUrl: uploadResult.publicUrl,
-            });
-          } else {
+    if (uploadResult) {
+      logger.success("[CDR_PROCESSING] Google Drive upload completed", {
+        fileId: uploadResult.fileId,
+        publicUrl: uploadResult.publicUrl,
+      });
+    } else {
             logger.warn(
               "[CDR_PROCESSING] Google Drive upload failed (CDR processing continues)"
             );
           }
-        } catch (uploadError) {
-          logger.error(
-            "[CDR_PROCESSING] Google Drive upload error (CDR processing continues)",
-            {
-              error: uploadError.message,
-            }
-          );
-        }
-      }
+  }
+} catch (uploadError) {
+  logger.error("[CDR_PROCESSING] Google Drive upload error", {
+    error: uploadError.message,
+  });
+}
     }
 
     // Update CDR summary
