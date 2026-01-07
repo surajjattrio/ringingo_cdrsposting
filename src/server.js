@@ -23,8 +23,9 @@ import { connectMongoDB, getCollections, closeMongoDB } from "./database.js";
 import { checkRegistration } from "./register.js";
 import rabbitMQ from "./rabbitmq.js";
 import { wrapCollectionsWithQueue } from "./mongodb-queue-wrapper.js";
-import webhookRoutes from './webhook/webhook-routes.js';
-import googleDriveUploader from './google-drive-uploader.js';
+import webhookRoutes from "./webhook/webhook-routes.js";
+import googleDriveRoutes from "./googledrive/google-drive-routes.js";
+import googleDriveUploader from "./google-drive-uploader.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -45,7 +46,8 @@ app.use(express.json({ limit: config.app.maxRequestSize }));
 app.use(
   express.urlencoded({ extended: true, limit: config.app.maxRequestSize })
 );
-app.use('/api', webhookRoutes);
+app.use("/api", webhookRoutes);
+app.use("/api", googleDriveRoutes);
 
 /**
  * Helper function to check if string starts with number
@@ -69,7 +71,7 @@ async function manageDropCallFlag(leadUuid, hangupReason, variablesValue) {
       hangupReason,
     });
 
-    const autoHangup = variablesValue['sip_h_X-amd_hangup'] || "";
+    const autoHangup = variablesValue["sip_h_X-amd_hangup"] || "";
     let filterCode;
 
     if (autoHangup === "true") {
@@ -154,7 +156,7 @@ async function manageDropCallFlag(leadUuid, hangupReason, variablesValue) {
  */
 async function manageLeadOriginated(variablesValue) {
   try {
-    const autoLeadUuid = variablesValue['sip_h_P-lead_uuid'] || "";
+    const autoLeadUuid = variablesValue["sip_h_P-lead_uuid"] || "";
 
     if (autoLeadUuid) {
       logger.debug("[MANAGE_LEAD_ORIGINATED] Deleting lead originate", {
@@ -275,7 +277,7 @@ async function checkNumberMasking(campaignUuid, campaignFlag) {
  */
 async function manageLeadRetries(variablesValue, campaignUuid, campaignFlag) {
   try {
-    const leadUuid = variablesValue['sip_h_P-lead_uuid'] || "";
+    const leadUuid = variablesValue["sip_h_P-lead_uuid"] || "";
     if (!leadUuid || !campaignUuid) {
       return;
     }
@@ -309,33 +311,33 @@ async function manageLeadRetries(variablesValue, campaignUuid, campaignFlag) {
 
             if (parseInt(leadType) === parseInt(maxRetries)) {
               await collections.leadsInQueue.deleteOne(leadFilter);
-              logger.debug("[MANAGE_LEAD_RETRIES] Max retries reached, deleted");
-            } else {
-              await collections.leadsInQueue.updateOne(
-                leadFilter,
-                {
-                  $set: {
-                    lead_resent_count: leadType,
-                    lead_sent: "1",
-                    resend_lead_time: isoDate,
-                  },
-                }
+              logger.debug(
+                "[MANAGE_LEAD_RETRIES] Max retries reached, deleted"
               );
-              logger.debug("[MANAGE_LEAD_RETRIES] Updated retry count", { leadType });
+            } else {
+              await collections.leadsInQueue.updateOne(leadFilter, {
+                $set: {
+                  lead_resent_count: leadType,
+                  lead_sent: "1",
+                  resend_lead_time: isoDate,
+                },
+              });
+              logger.debug("[MANAGE_LEAD_RETRIES] Updated retry count", {
+                leadType,
+              });
             }
           }
         } else {
-          await collections.leadsInQueue.updateOne(
-            leadFilter,
-            {
-              $set: {
-                lead_resent_count: "1",
-                lead_sent: "1",
-                resend_lead_time: isoDate,
-              },
-            }
+          await collections.leadsInQueue.updateOne(leadFilter, {
+            $set: {
+              lead_resent_count: "1",
+              lead_sent: "1",
+              resend_lead_time: isoDate,
+            },
+          });
+          logger.debug(
+            "[MANAGE_LEAD_RETRIES] Updated successfully - first retry"
           );
-          logger.debug("[MANAGE_LEAD_RETRIES] Updated successfully - first retry");
         }
       }
     }
@@ -362,7 +364,7 @@ async function leadEntryManagement(destinationNumber, userUuid, tenantUuid) {
     const destNumber = destinationNumber.replace(/^\+/, "");
     const tenantInfo = await collections.tenant.findOne({ uuid: tenantUuid });
     const leadUuid = uuidv4();
-    
+
     const leadFilter = {
       phone_number: destNumber,
       tenant_uuid: tenantUuid,
@@ -422,18 +424,17 @@ async function getVoicebroadcastDisposition(
 ) {
   try {
     const filterCodes = {
-      "0": "SURVEY",
-      "1": "IVR",
-      "2": "NI",
-      "3": "DNC",
+      0: "SURVEY",
+      1: "IVR",
+      2: "NI",
+      3: "DNC",
       CANCEL: "NA",
       "Busy Here": "Busy",
       "Temporarily Unavailable": "NAVL",
       send_bye: "NAVL",
     };
 
-    const code =
-      filterCodes[vbType] || (duration !== "0" ? "NDP" : "NA");
+    const code = filterCodes[vbType] || (duration !== "0" ? "NDP" : "NA");
     const disposition = await collections.disposition.findOne({ code: code });
 
     if (disposition) {
@@ -451,7 +452,7 @@ async function getVoicebroadcastDisposition(
       const voicebroadcastData = await collections.voiceBroadcast.findOne({
         uuid: voicebroadcastUuid,
       });
-      
+
       logger.debug("[GET_VOICEBROADCAST_DISPOSITION] Voicebroadcast data", {
         voicebroadcastData,
       });
@@ -459,7 +460,7 @@ async function getVoicebroadcastDisposition(
       const leadManagementData = await collections.leadManagement.findOne({
         lead_management_uuid: leadUuid,
       });
-      
+
       logger.debug("[GET_VOICEBROADCAST_DISPOSITION] Lead management data", {
         leadManagementData,
       });
@@ -496,19 +497,26 @@ async function getVoicebroadcastDisposition(
           await collections.leadBroadcastQueue.insertOne(
             leadBroadcastQueueInsert
           );
-          logger.debug("[GET_VOICEBROADCAST_DISPOSITION] Lead broadcast queue insert", {
-            leadBroadcastQueueInsert,
-          });
+          logger.debug(
+            "[GET_VOICEBROADCAST_DISPOSITION] Lead broadcast queue insert",
+            {
+              leadBroadcastQueueInsert,
+            }
+          );
 
           await collections.leadManagement.updateOne(
             { lead_management_uuid: leadUuid },
             { $inc: { retries_count: 1 } }
           );
         } else {
-          logger.debug("[GET_VOICEBROADCAST_DISPOSITION] Not going in disposition condition");
+          logger.debug(
+            "[GET_VOICEBROADCAST_DISPOSITION] Not going in disposition condition"
+          );
         }
       } else {
-        logger.debug("[GET_VOICEBROADCAST_DISPOSITION] Not going in retries condition");
+        logger.debug(
+          "[GET_VOICEBROADCAST_DISPOSITION] Not going in retries condition"
+        );
       }
 
       return dispositionUuid;
@@ -566,10 +574,10 @@ async function sendNotification(
     const senderPassword = "1b7f00c11402cc3c26cacf592725ea87";
     const fromEmail = "notifications@test.io";
     const recipientEmail = String(tenantInfo.email);
-    
+
     const finalCallType = callType === "local" ? "sip" : callType;
     const subject = "Missed call notification from COMPANY";
-    
+
     const message = `
     <html>
     <body>
@@ -640,7 +648,7 @@ async function setCallerSticky(userUuid, tenantUuid, callerIdNumber) {
     const userRoleInfo = await collections.userRole.findOne({
       uuid: userInfo.user_role_uuid,
     });
-    
+
     logger.debug("[SET_CALLER_STICKY] User role info", { userRoleInfo });
 
     if (userRoleInfo && userRoleInfo.sticky_agent === "0") {
@@ -682,14 +690,14 @@ async function getTelecomCircle(tenantUuid, destinationNumber) {
         tenant_uuid: tenantUuid,
         prefix: { $regex: "^" + firstDigit },
       };
-      
+
       const results = await collections.telecomCircle.find(filter).toArray();
 
       for (const prefixDetails of results) {
         if (prefixLen === 0 || prefixLen < prefixDetails.prefix.length) {
           prefixLen = prefixDetails.prefix.length;
           longestPrefix = prefixDetails.prefix;
-          longestPrefixName = prefixDetails.uuid;          
+          longestPrefixName = prefixDetails.uuid;
           logger.debug("[GET_TELECOM_CIRCLE] Prefix base caller id match", {
             longestPrefix,
             longestPrefixName,
@@ -698,7 +706,7 @@ async function getTelecomCircle(tenantUuid, destinationNumber) {
       }
 
       destNumber = destNumber.slice(0, -1);
-      
+
       if (destinationNumber.startsWith(longestPrefix)) {
         return longestPrefixName;
       }
@@ -726,7 +734,7 @@ app.post("/cdrs", async (req, res) => {
     logger.info("==============================");
 
     const data = req.body;
-    logger.info("CDR-DATA....",data);
+    logger.info("CDR-DATA....", data);
     if (!data || !data.variables) {
       logger.error("[CDR_PROCESSING] Invalid or missing variables data");
       return res
@@ -751,7 +759,7 @@ app.post("/cdrs", async (req, res) => {
     }
     logger.debug("[CDR_PROCESSING] First leg store", { firstLegStore });
 
-    const autoCampaign = variablesValue['sip_h_P-auto_campaign'] || "";
+    const autoCampaign = variablesValue["sip_h_P-auto_campaign"] || "";
     const threewayAgentExtensionUuid =
       variablesValue.threeway_agent_extension_uuid || "";
 
@@ -760,10 +768,10 @@ app.post("/cdrs", async (req, res) => {
         user_uuid: threewayAgentExtensionUuid,
       });
     }
-    
+
     logger.debug("[CDR] Auto campaign", { autoCampaign });
 
-    let voiceBroadcast = variablesValue['sip_h_P-voicebroadcast'] || "";
+    let voiceBroadcast = variablesValue["sip_h_P-voicebroadcast"] || "";
     if (voiceBroadcast === "false") {
       voiceBroadcast = "";
     }
@@ -800,12 +808,12 @@ app.post("/cdrs", async (req, res) => {
     await manageLeadOriginated(variablesValue);
 
     const autoCampaignOriginateUuid =
-      variablesValue['sip_h_P-auto_campaign_originate'] || "";
+      variablesValue["sip_h_P-auto_campaign_originate"] || "";
     if (autoCampaignOriginateUuid) {
       await manageAutoCampaignCount(variablesValue, autoCampaignOriginateUuid);
     }
 
-    const autoAgentFlag = variablesValue['sip_h_P-auto_agent_flag'] || "";
+    const autoAgentFlag = variablesValue["sip_h_P-auto_agent_flag"] || "";
     if (autoCampaignOriginateUuid && autoAgentFlag === "") {
       await manageAutoCampaign(variablesValue, autoCampaignOriginateUuid);
     }
@@ -817,7 +825,9 @@ app.post("/cdrs", async (req, res) => {
     }
 
     let callstart =
-      variablesValue.custom_callstart || variablesValue['sip_h_P-callstart'] || "";
+      variablesValue.custom_callstart ||
+      variablesValue["sip_h_P-callstart"] ||
+      "";
     logger.debug("[CDR] Call start", { callstart });
 
     const createdAt = new Date();
@@ -860,18 +870,18 @@ app.post("/cdrs", async (req, res) => {
     const ipMapUuid = variablesValue.ip_map_uuid || "";
     const customCallid =
       variablesValue.custom_callid ||
-      variablesValue['sip_h_X-custom_callid'] ||
-      variablesValue['sip_h_X-Custom-Callid'] ||
+      variablesValue["sip_h_X-custom_callid"] ||
+      variablesValue["sip_h_X-Custom-Callid"] ||
       "";
     const tenantUuid =
-      variablesValue.tenant_uuid || variablesValue['sip_h_P-tenant_uuid'] || "";
-    
+      variablesValue.tenant_uuid || variablesValue["sip_h_P-tenant_uuid"] || "";
+
     let direction = variablesValue.direction || "outbound";
     const bridgeUuid = variablesValue.bridge_uuid || uuidv4();
-    
+
     let userUuid =
-      variablesValue.user_uuid || variablesValue['sip_h_P-user_uuid'] || "";
-    
+      variablesValue.user_uuid || variablesValue["sip_h_P-user_uuid"] || "";
+
     const authenticationType = variablesValue.authentication_type || "auth";
     let extensionUuid = variablesValue.extension_uuid || "";
     const trunkUuid = variablesValue.trunk_uuid || "";
@@ -887,9 +897,9 @@ app.post("/cdrs", async (req, res) => {
       "";
     const dialedUser = variablesValue.dialed_user || "";
     let leadUuid =
-      variablesValue['sip_h_X-Leaduuid'] ||
-      variablesValue['sip_h_X-lead_uuid'] ||
-      variablesValue['sip_h_P-lead_uuid'] ||
+      variablesValue["sip_h_X-Leaduuid"] ||
+      variablesValue["sip_h_X-lead_uuid"] ||
+      variablesValue["sip_h_P-lead_uuid"] ||
       "";
 
     if (leadUuid === "null") {
@@ -902,12 +912,12 @@ app.post("/cdrs", async (req, res) => {
     let autoCallFlag = "0";
     let hangupCause = "";
     let campaignUuid =
-      variablesValue['sip_h_X-selectedcampaignuuid'] ||
-      variablesValue['sip_h_P-campaign_uuid'] ||
+      variablesValue["sip_h_X-selectedcampaignuuid"] ||
+      variablesValue["sip_h_P-campaign_uuid"] ||
       "";
-    
-    const campaignFlag = variablesValue['sip_h_P-campaign_flag'] || "";
-    
+
+    const campaignFlag = variablesValue["sip_h_P-campaign_flag"] || "";
+
     logger.debug("[CDR] Campaign flag", { campaignFlag });
 
     const callStickStatus = variablesValue.call_stick_status || 1;
@@ -917,11 +927,11 @@ app.post("/cdrs", async (req, res) => {
     const waitsecond = parseInt(variablesValue.waitsec || 0);
     const ringingsecond = parseInt(variablesValue.answersec || 0);
     const callend = variablesValue.end_stamp || "";
-    
+
     logger.debug("[CDR] End call", { callend });
 
     const totalduration = parseInt(variablesValue.duration || 0);
-    
+
     let holdsecond;
     if (autoCampaign || ipMapUuid || pbxFeature) {
       holdsecond =
@@ -943,7 +953,7 @@ app.post("/cdrs", async (req, res) => {
     if (campaignUuid) {
       const currentDate = new Date();
       const campaignDate = currentDate.toISOString().slice(0, 10);
-      const managerUuid = variablesValue['sip_h_P-manager_uuid'] || "";
+      const managerUuid = variablesValue["sip_h_P-manager_uuid"] || "";
 
       const campaignStatisticsFilter = {
         tenant_uuid: tenantUuid,
@@ -983,7 +993,9 @@ app.post("/cdrs", async (req, res) => {
           autoCallFlag = "2";
         } else if (autoCampaign && autoCampaignOriginateUuid && leadUuid) {
           logger.debug("[CDR] This is success but fail");
-          if (["NO_USER_RESPONSE", "ORIGINATOR_CANCEL"].includes(hangupReason)) {
+          if (
+            ["NO_USER_RESPONSE", "ORIGINATOR_CANCEL"].includes(hangupReason)
+          ) {
             await manageDropCallFlag(leadUuid, hangupReason, variablesValue);
             if (billsecond > 0) {
               campaignStatisticsDropCount = 1;
@@ -1005,7 +1017,7 @@ app.post("/cdrs", async (req, res) => {
         campaignStatisticsFailCount = billsecond > 0 ? 0 : 1;
       }
 
-      const autoHangup = variablesValue['sip_h_X-amd_hangup'] || "";
+      const autoHangup = variablesValue["sip_h_X-amd_hangup"] || "";
       if (autoHangup === "true") {
         campaignStatisticsAmdCount = 1;
         campaignStatisticsDropCount = 0;
@@ -1037,10 +1049,10 @@ app.post("/cdrs", async (req, res) => {
       variablesValue.custom_destination_number ||
       variablesValue.effective_destination_number ||
       dialedUser;
-    
+
     let disposition = variablesValue.hangup_cause || "NORMAL_CLEARING";
     let callState = "normal";
-    
+
     const originateFailedCause = variablesValue.originate_failed_cause || "";
     if (originateFailedCause === "ORIGINATOR_CANCEL") {
       disposition = originateFailedCause;
@@ -1079,20 +1091,23 @@ app.post("/cdrs", async (req, res) => {
     }
 
     let recordingPath = "";
-    
+
     logger.debug("[CDR] Bridge UUID", {
       bridgeUuid: variablesValue.bridge_uuid,
     });
     logger.debug("[CDR] Auto call type", {
-      autoCallType: variablesValue['sip_h_X-Autocalltype'],
+      autoCallType: variablesValue["sip_h_X-Autocalltype"],
     });
     logger.debug("[CDR] Recording directory", {
       recordingDirectory: variablesValue.recording_directory,
     });
 
-    if (variablesValue.custom_recording === "0" || !variablesValue.custom_recording) {
+    if (
+      variablesValue.custom_recording === "0" ||
+      !variablesValue.custom_recording
+    ) {
       logger.debug("[CDR] This is recording");
-      
+
       if (variablesValue.current_application === "record_session") {
         recordingPath = variablesValue.current_application_data || "";
       } else if (
@@ -1108,11 +1123,11 @@ app.post("/cdrs", async (req, res) => {
         });
       }
 
-      if (variablesValue['sip_h_X-Autocalltype'] === "true") {
+      if (variablesValue["sip_h_X-Autocalltype"] === "true") {
         const recordingDialedUser = variablesValue.sip_to_user || "";
         const recordingUuid = variablesValue.bridge_uuid || "";
         const recordingDirectory = variablesValue.recording_directory || "";
-        
+
         if (recordingUuid) {
           recordingPath = `${recordingDirectory}/${recordingDialedUser}_${recordingUuid}.wav`;
         }
@@ -1121,7 +1136,7 @@ app.post("/cdrs", async (req, res) => {
 
     const receiverExtensionUuid = variablesValue.receiver_extension_uuid || "";
     const originateDisposition = variablesValue.originate_disposition || "";
-    
+
     if (["NO_ANSWER", "USER_BUSY"].includes(originateDisposition)) {
       callState = "missed";
       disposition = originateDisposition;
@@ -1144,7 +1159,7 @@ app.post("/cdrs", async (req, res) => {
         campaignUuid,
         campaignFlag
       );
-      
+
       logger.debug("[CDR] Result outbound campaign", {
         resultOutboundCampaign,
       });
@@ -1153,7 +1168,7 @@ app.post("/cdrs", async (req, res) => {
         numberMasking = resultOutboundCampaign.number_masking || "1";
         dialMethod = resultOutboundCampaign.dial_method || "";
       }
-      
+
       logger.debug("[CDR] Dial method of OC", { dialMethod });
     }
 
@@ -1173,15 +1188,16 @@ app.post("/cdrs", async (req, res) => {
       );
     }
 
-    const autoCampaignCheck = variablesValue['sip_h_P-auto_campaign'] || "";
-    const predictiveCampaign = variablesValue['sip_h_P-predictive_campaign'] || "";
-    
+    const autoCampaignCheck = variablesValue["sip_h_P-auto_campaign"] || "";
+    const predictiveCampaign =
+      variablesValue["sip_h_P-predictive_campaign"] || "";
+
     if (predictiveCampaign === "true") {
       destinationNumber =
-        variablesValue['sip_h_P-original_number'] || destinationNumber;
+        variablesValue["sip_h_P-original_number"] || destinationNumber;
       const predictiveFlag = autoCallFlag === "1" ? "0" : "1";
       const predictiveUuid = uuidv4();
-      
+
       const insertPredictiveCampaign = {
         uuid: predictiveUuid,
         campaign_uuid: campaignUuid,
@@ -1193,7 +1209,7 @@ app.post("/cdrs", async (req, res) => {
       await collections.predictiveCalculation.insertOne(
         insertPredictiveCampaign
       );
-      
+
       logger.debug("[CDR] Insert predictive campaign", {
         insertPredictiveCampaign,
       });
@@ -1202,11 +1218,11 @@ app.post("/cdrs", async (req, res) => {
     if (autoCampaignCheck === "true") {
       logger.debug("[CDR] Auto campaign CHANGE Destination");
       destinationNumber =
-        variablesValue['sip_h_P-original_number'] || destinationNumber;
-      callerIdName = variablesValue['Hunt-Callee-ID-Name'] || callerIdName;
+        variablesValue["sip_h_P-original_number"] || destinationNumber;
+      callerIdName = variablesValue["Hunt-Callee-ID-Name"] || callerIdName;
       callerIdNumber =
-        variablesValue['Hunt-Orig-Caller-ID-Number'] || callerIdNumber;
-      numberMasking = variablesValue['sip_h_P-number_masking'] || numberMasking;
+        variablesValue["Hunt-Orig-Caller-ID-Number"] || callerIdNumber;
+      numberMasking = variablesValue["sip_h_P-number_masking"] || numberMasking;
     }
 
     const hangupPartyDisposition = variablesValue.sip_hangup_disposition || "";
@@ -1296,7 +1312,7 @@ app.post("/cdrs", async (req, res) => {
 
         if (webhookData) {
           const url = String(webhookData.web_hook_url);
-          
+
           const webHookData = {
             description: "incoming calls notification from Belsmart",
             caller_id_name: callerIdName,
@@ -1315,7 +1331,7 @@ app.post("/cdrs", async (req, res) => {
               headers: { "Content-Type": "application/json" },
               timeout: 10000,
             });
-            
+
             logger.debug("[CDR] Response webhooks", {
               status: responseWebhooks.status,
             });
@@ -1330,14 +1346,14 @@ app.post("/cdrs", async (req, res) => {
       // Regular CDR processing
       if (autoCampaignCheck) {
         logger.debug("[CDR] Auto Campaign call");
-        if (variablesValue['sip_h_X-Autocalltype'] !== "true") {
+        if (variablesValue["sip_h_X-Autocalltype"] !== "true") {
           userUuid = "";
           logger.debug("[CDR] Remove user_uuid");
         }
       }
 
       const didPstn = variablesValue.did_pstn || "";
-      
+
       const insertCdrJson = {
         uuid: bridgeUuid,
         user_uuid: userUuid,
@@ -1392,7 +1408,7 @@ app.post("/cdrs", async (req, res) => {
     ) {
       const incomingBridgeUuid = bridgeUuid + "incoming";
       direction = "inbound";
-      
+
       const insertCdrJsonIncoming = {
         uuid: incomingBridgeUuid,
         user_uuid: userUuid,
@@ -1437,7 +1453,7 @@ app.post("/cdrs", async (req, res) => {
         "[CDR] Second harsh CDR FOR INBOUND FAIL OR DIRECT OUTBOUND Insert",
         { insertCdrJsonIncoming }
       );
-      
+
       await collections.cdrs.insertOne(insertCdrJsonIncoming);
     }
 
@@ -1463,40 +1479,45 @@ app.post("/cdrs", async (req, res) => {
       await collections.recordings.insertOne(insertRecordingJson);
       logger.debug("[CDR] Recording Insert", { insertRecordingJson });
 
-  // Upload recording to Google Drive (synchronous)
-  if (config.googleDrive.enabled) {
-    try {
-      logger.info("[CDR_PROCESSING] Starting Google Drive upload", {
-        recordingPath,
-        cdrUuid: bridgeUuid,
-      });
+      // Upload recording to Google Drive (synchronous)
+      if (config.googleDrive.enabled) {
+        try {
+          logger.info("[CDR_PROCESSING] Starting Google Drive upload", {
+            recordingPath,
+            cdrUuid: bridgeUuid,
+          });
 
-      const cdrData = {
-        uuid: bridgeUuid,
-        user_uuid: userUuid,
-        callstart: callstart,
-      };
+          const cdrData = {
+            uuid: bridgeUuid,
+            user_uuid: userUuid,
+            callstart: callstart,
+          };
 
-      const uploadResult = await googleDriveUploader.processRecording(
-        insertRecordingJson,
-        cdrData
-      );
+          const uploadResult = await googleDriveUploader.processRecording(
+            insertRecordingJson,
+            cdrData
+          );
 
-      if (uploadResult) {
-        logger.success("[CDR_PROCESSING] Google Drive upload completed", {
-          fileId: uploadResult.fileId,
-          publicUrl: uploadResult.publicUrl,
-        });
-      } else {
-        logger.warn("[CDR_PROCESSING] Google Drive upload failed (CDR processing continues)");
+          if (uploadResult) {
+            logger.success("[CDR_PROCESSING] Google Drive upload completed", {
+              fileId: uploadResult.fileId,
+              publicUrl: uploadResult.publicUrl,
+            });
+          } else {
+            logger.warn(
+              "[CDR_PROCESSING] Google Drive upload failed (CDR processing continues)"
+            );
+          }
+        } catch (uploadError) {
+          logger.error(
+            "[CDR_PROCESSING] Google Drive upload error (CDR processing continues)",
+            {
+              error: uploadError.message,
+            }
+          );
+        }
       }
-    } catch (uploadError) {
-      logger.error("[CDR_PROCESSING] Google Drive upload error (CDR processing continues)", {
-        error: uploadError.message,
-      });
     }
-  }
-}
 
     // Update CDR summary
     const todayDate = new Date().toISOString().slice(0, 10);
@@ -1538,21 +1559,19 @@ app.post("/cdrs", async (req, res) => {
     if (receiverExtensionUuid) {
       direction = "inbound";
       disconnectedBy = "";
-      
+
       if (hangupPartyDisposition === "send_bye") {
         disconnectedBy = direction === "inbound" ? "0" : "1";
-      } else if (
-        ["recv_bye", "recv_cancel"].includes(hangupPartyDisposition)
-      ) {
+      } else if (["recv_bye", "recv_cancel"].includes(hangupPartyDisposition)) {
         disconnectedBy = direction === "inbound" ? "1" : "0";
       } else if (hangupPartyDisposition === "send_refuse") {
         disconnectedBy = direction === "inbound" ? "0" : "1";
       }
-      
+
       logger.debug("[CDR] Inbound disconnected by", { disconnectedBy });
 
       const sip_call_id = variablesValue.sip_call_id || customCallid;
-      
+
       const insertSecondLegCdrJson = {
         uuid: bridgeUuid + "-receiver",
         user_uuid: receiverExtensionUuid,
@@ -1621,40 +1640,51 @@ app.post("/cdrs", async (req, res) => {
         logger.debug("[CDR] Second Leg Recording Insert", {
           insertSecondLegRecordingJson,
         });
-  // Upload recording to Google Drive (synchronous)
-  if (config.googleDrive.enabled) {
-    try {
-      logger.info("[CDR_PROCESSING] Starting Google Drive upload (Second Leg)", {
-        recordingPath,
-        cdrUuid: bridgeUuid + "-receiver",
-      });
+        // Upload recording to Google Drive (synchronous)
+        if (config.googleDrive.enabled) {
+          try {
+            logger.info(
+              "[CDR_PROCESSING] Starting Google Drive upload (Second Leg)",
+              {
+                recordingPath,
+                cdrUuid: bridgeUuid + "-receiver",
+              }
+            );
 
-      const cdrData = {
-        uuid: bridgeUuid + "-receiver",
-        user_uuid: receiverExtensionUuid,
-        callstart: callstart,
-      };
+            const cdrData = {
+              uuid: bridgeUuid + "-receiver",
+              user_uuid: receiverExtensionUuid,
+              callstart: callstart,
+            };
 
-      const uploadResult = await googleDriveUploader.processRecording(
-        insertSecondLegRecordingJson,
-        cdrData
-      );
+            const uploadResult = await googleDriveUploader.processRecording(
+              insertSecondLegRecordingJson,
+              cdrData
+            );
 
-      if (uploadResult) {
-        logger.success("[CDR_PROCESSING] Google Drive upload completed (Second Leg)", {
-          fileId: uploadResult.fileId,
-          publicUrl: uploadResult.publicUrl,
-        });
-      } else {
-        logger.warn("[CDR_PROCESSING] Google Drive upload failed (Second Leg)");
+            if (uploadResult) {
+              logger.success(
+                "[CDR_PROCESSING] Google Drive upload completed (Second Leg)",
+                {
+                  fileId: uploadResult.fileId,
+                  publicUrl: uploadResult.publicUrl,
+                }
+              );
+            } else {
+              logger.warn(
+                "[CDR_PROCESSING] Google Drive upload failed (Second Leg)"
+              );
+            }
+          } catch (uploadError) {
+            logger.error(
+              "[CDR_PROCESSING] Google Drive upload error (Second Leg)",
+              {
+                error: uploadError.message,
+              }
+            );
+          }
+        }
       }
-    } catch (uploadError) {
-      logger.error("[CDR_PROCESSING] Google Drive upload error (Second Leg)", {
-        error: uploadError.message,
-      });
-    }
-  }
-}
 
       const todayDateSecondLeg = new Date().toISOString().slice(0, 10);
       const summaryFilterSecondLeg = {
@@ -1697,7 +1727,7 @@ app.post("/cdrs", async (req, res) => {
       logger.debug("[CDR] PBX Feature processing", { pbxFeature });
 
       let dialedUserForPbx = variablesValue.dialed_user || "";
-      
+
       if (pbxFeature === "call_queue") {
         const ccAgent = variablesValue.cc_agent || "";
         dialedUserForPbx = ccAgent.replace("@default", "") || dialedUserForPbx;
@@ -1711,11 +1741,11 @@ app.post("/cdrs", async (req, res) => {
         username: extensionUuid,
         tenant_uuid: tenantUuid,
       };
-      
+
       const extensionsResult = await collections.extensions.findOne(
         extensionSearchQuery
       );
-      
+
       logger.debug("[CDR] IN PBX FEATURE EXTRA ENTRY", {
         pbxFeature,
         extensionSearchQuery,
@@ -1754,15 +1784,15 @@ app.post("/cdrs", async (req, res) => {
         }
 
         const harshUser = variablesValue.harsh_user || "";
-        
+
         if (pbxFeature === "ring_group") {
           const lastBridgeUuid = variablesValue.last_bridge_to || "";
-          
+
           if (lastBridgeUuid) {
             const callData = await collections.tmpRinggroup.findOne({
               call_uuid: lastBridgeUuid,
             });
-            
+
             logger.debug("[CDR] Call data", { callData });
 
             if (callData) {
@@ -1775,11 +1805,11 @@ app.post("/cdrs", async (req, res) => {
             }
           } else {
             logger.debug("[CDR] This is last bridge else");
-            
+
             const ringgroupUuid = variablesValue.ringgroup_id || "";
             const ringgroupFromDomain =
               variablesValue.ringgroup_from_domain || "";
-            
+
             logger.debug("[CDR] Ringgroup UUID", { ringgroupUuid });
 
             const ringgroupData = await collections.ringGroup.findOne({
@@ -1803,7 +1833,7 @@ app.post("/cdrs", async (req, res) => {
                         extension,
                         ringgroupFromDomain
                       );
-                      
+
                       logger.debug("[CDR] Registration check", {
                         extension,
                         isRegistered,
@@ -1845,7 +1875,7 @@ app.post("/cdrs", async (req, res) => {
         const agentLiveData = await collections.agentLiveReport.findOne({
           agent_uuid: userUuid,
         });
-        
+
         logger.debug("[CDR] Campaign uuid of inbound call", {
           agentLiveData,
         });
@@ -1923,40 +1953,51 @@ app.post("/cdrs", async (req, res) => {
             insertRecordingJson,
           });
 
-  // Upload recording to Google Drive (synchronous)
-  if (config.googleDrive.enabled) {
-    try {
-      logger.info("[CDR_PROCESSING] Starting Google Drive upload (PBX Feature)", {
-        recordingPath,
-        cdrUuid: bridgeUuid + "-" + pbxFeature,
-      });
+          // Upload recording to Google Drive (synchronous)
+          if (config.googleDrive.enabled) {
+            try {
+              logger.info(
+                "[CDR_PROCESSING] Starting Google Drive upload (PBX Feature)",
+                {
+                  recordingPath,
+                  cdrUuid: bridgeUuid + "-" + pbxFeature,
+                }
+              );
 
-      const cdrData = {
-        uuid: bridgeUuid + "-" + pbxFeature,
-        user_uuid: userUuid,
-        callstart: callstart,
-      };
+              const cdrData = {
+                uuid: bridgeUuid + "-" + pbxFeature,
+                user_uuid: userUuid,
+                callstart: callstart,
+              };
 
-      const uploadResult = await googleDriveUploader.processRecording(
-        insertRecordingJson,
-        cdrData
-      );
+              const uploadResult = await googleDriveUploader.processRecording(
+                insertRecordingJson,
+                cdrData
+              );
 
-      if (uploadResult) {
-        logger.success("[CDR_PROCESSING] Google Drive upload completed (PBX Feature)", {
-          fileId: uploadResult.fileId,
-          publicUrl: uploadResult.publicUrl,
-        });
-      } else {
-        logger.warn("[CDR_PROCESSING] Google Drive upload failed (PBX Feature)");
-      }
-    } catch (uploadError) {
-      logger.error("[CDR_PROCESSING] Google Drive upload error (PBX Feature)", {
-        error: uploadError.message,
-      });
-    }
-  }
-}
+              if (uploadResult) {
+                logger.success(
+                  "[CDR_PROCESSING] Google Drive upload completed (PBX Feature)",
+                  {
+                    fileId: uploadResult.fileId,
+                    publicUrl: uploadResult.publicUrl,
+                  }
+                );
+              } else {
+                logger.warn(
+                  "[CDR_PROCESSING] Google Drive upload failed (PBX Feature)"
+                );
+              }
+            } catch (uploadError) {
+              logger.error(
+                "[CDR_PROCESSING] Google Drive upload error (PBX Feature)",
+                {
+                  error: uploadError.message,
+                }
+              );
+            }
+          }
+        }
 
         const todayDateSecond = new Date().toISOString().slice(0, 10);
         const summaryFilterPbx = {
@@ -2030,27 +2071,14 @@ async function startServer() {
 
     // Connect to RabbitMQ
     await rabbitMQ.connect();
-    logger.success('✅ RabbitMQ connection established');
+    logger.success("✅ RabbitMQ connection established");
 
     // Wrap collections with queue functionality
     collections = wrapCollectionsWithQueue(rawCollections);
-    logger.success('✅ Collections wrapped with queue functionality');
-
-    // Initialize Google Drive uploader (if enabled)
-    if (config.googleDrive.enabled) {
-      try {
-        await googleDriveUploader.initialize();
-        logger.success('✅ Google Drive uploader initialized');
-      } catch (error) {
-        logger.error('❌ Google Drive initialization failed', {
-          error: error.message,
-        });
-        logger.warn('⚠️  Continuing without Google Drive support');
-      }
-    }
+    logger.success("✅ Collections wrapped with queue functionality");
 
     // Start Express server
-    const server = app.listen(config.app.port,'0.0.0.0', () => {
+    const server = app.listen(config.app.port, "0.0.0.0", () => {
       logger.success(`🚀 CDR Server running on port ${config.app.port}`);
       logger.info(`Environment: ${config.app.env}`);
       logger.info(`Log directory: ${config.logging.dir}`);

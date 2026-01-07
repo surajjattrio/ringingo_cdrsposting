@@ -7,72 +7,123 @@
 import { google } from "googleapis";
 import fs from "fs";
 import path from "path";
-import config from "./config.js";
 import logger from "./logger.js";
 import { getDatabase } from "./database.js";
+import googleDriveSettingsManager from "./googledrive/google-drive-settings-manager.js";
 
 class GoogleDriveUploader {
   constructor() {
-    this.drive = null;
-    this.oauth2Client = null;
+    this.driveClients = new Map(); // Cache drive clients per tenant
     this.isInitialized = false;
   }
 
   /**
-   * Initialize Google Drive client with OAuth
+   * Get or create Google Drive client for tenant
    */
-  async initialize() {
+  async getDriveClient(tenantUuid = null) {
     try {
-      if (this.isInitialized) {
-        return;
+      // Check cache first
+      const cacheKey = tenantUuid || "global";
+      if (this.driveClients.has(cacheKey)) {
+        return this.driveClients.get(cacheKey);
       }
 
-      logger.info("[GOOGLE_DRIVE] Initializing Google Drive client...");
+      // Get settings from database
+      const settings = await googleDriveSettingsManager.getSettings(tenantUuid);
+
+      if (!settings) {
+        throw new Error(
+          tenantUuid
+            ? `Google Drive settings not found for tenant: ${tenantUuid}`
+            : "Global Google Drive settings not found"
+        );
+      }
+
+      if (!settings.enabled) {
+        throw new Error(
+          tenantUuid
+            ? `Google Drive is disabled for tenant: ${tenantUuid}`
+            : "Google Drive is disabled globally"
+        );
+      }
+
+      logger.info("[GOOGLE_DRIVE] Initializing Google Drive client", {
+        tenant_uuid: tenantUuid || "global",
+      });
 
       // Create OAuth2 client
-      this.oauth2Client = new google.auth.OAuth2(
-        config.googleDrive.clientId,
-        config.googleDrive.clientSecret,
-        config.googleDrive.redirectUri
+      const oauth2Client = new google.auth.OAuth2(
+        settings.client_id,
+        settings.client_secret,
+        settings.redirect_uri
       );
 
       // Set credentials with refresh token
-      this.oauth2Client.setCredentials({
-        refresh_token: config.googleDrive.refreshToken,
+      oauth2Client.setCredentials({
+        refresh_token: settings.refresh_token,
       });
 
       // Create Drive API client
-      this.drive = google.drive({ version: "v3", auth: this.oauth2Client });
+      const drive = google.drive({ version: "v3", auth: oauth2Client });
 
       // Verify connection by getting root folder info
-      const rootFolder = await this.drive.files.get({
-        fileId: config.googleDrive.rootFolderId,
+      const rootFolder = await drive.files.get({
+        fileId: settings.root_folder_id,
         fields: "id, name",
       });
 
-      logger.success("[GOOGLE_DRIVE] Client initialized successfully");
-      logger.info(`[GOOGLE_DRIVE] Root folder: ${rootFolder.data.name}`);
+      logger.success("[GOOGLE_DRIVE] Client initialized successfully", {
+        tenant_uuid: tenantUuid || "global",
+        root_folder: rootFolder.data.name,
+      });
 
-      this.isInitialized = true;
+      // Cache the client
+      const clientData = {
+        drive,
+        oauth2Client,
+        rootFolderId: settings.root_folder_id,
+      };
+      this.driveClients.set(cacheKey, clientData);
+
+      return clientData;
     } catch (error) {
       logger.error("[GOOGLE_DRIVE] Initialization failed", {
         error: error.message,
         stack: error.stack,
+        tenant_uuid: tenantUuid,
       });
       throw error;
     }
   }
 
   /**
+   * Clear cached client (useful when settings are updated)
+   */
+  clearCache(tenantUuid = null) {
+    const cacheKey = tenantUuid || "global";
+    this.driveClients.delete(cacheKey);
+    logger.info("[GOOGLE_DRIVE] Cache cleared", {
+      tenant_uuid: tenantUuid || "global",
+    });
+  }
+
+  /**
+   * Clear all cached clients
+   */
+  clearAllCache() {
+    this.driveClients.clear();
+    logger.info("[GOOGLE_DRIVE] All cache cleared");
+  }
+
+  /**
    * Find or create folder by name in parent folder
    */
-  async findOrCreateFolder(folderName, parentFolderId) {
+  async findOrCreateFolder(drive, folderName, parentFolderId) {
     try {
-
       // Search for existing folder
       const query = `name='${folderName}' and '${parentFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
 
-      const response = await this.drive.files.list({
+      const response = await drive.files.list({
         q: query,
         fields: "files(id, name)",
         spaces: "drive",
@@ -91,7 +142,7 @@ class GoogleDriveUploader {
         parents: [parentFolderId],
       };
 
-      const folder = await this.drive.files.create({
+      const folder = await drive.files.create({
         requestBody: folderMetadata,
         fields: "id",
       });
@@ -145,11 +196,19 @@ class GoogleDriveUploader {
     while (attempt < maxRetries) {
       try {
         attempt++;
+
+        // Get tenant UUID from CDR data
+        const tenantUuid = cdrData.tenant_uuid || null;
+
         logger.info("[GOOGLE_DRIVE] Starting upload", {
           attempt,
           recordingPath: recordingData.recording_path,
           cdrUuid: cdrData.uuid,
+          tenant_uuid: tenantUuid || "global",
         });
+
+        // Get drive client for tenant
+        const { drive, rootFolderId } = await this.getDriveClient(tenantUuid);
 
         // Check if file exists
         if (!fs.existsSync(recordingData.recording_path)) {
@@ -167,11 +226,13 @@ class GoogleDriveUploader {
 
         // Create folder structure: Date/Agent Name
         const dateFolderId = await this.findOrCreateFolder(
+          drive,
           dateFolder,
-          config.googleDrive.rootFolderId
+          rootFolderId
         );
 
         const agentFolderId = await this.findOrCreateFolder(
+          drive,
           agentName,
           dateFolderId
         );
@@ -194,16 +255,17 @@ class GoogleDriveUploader {
           fileName,
           agentFolder: agentName,
           dateFolder,
+          tenant_uuid: tenantUuid || "global",
         });
 
-        const file = await this.drive.files.create({
+        const file = await drive.files.create({
           requestBody: fileMetadata,
           media: media,
           fields: "id, name, webViewLink, webContentLink",
         });
 
         // Make file publicly accessible
-        await this.drive.permissions.create({
+        await drive.permissions.create({
           fileId: file.data.id,
           requestBody: {
             role: "reader",
@@ -221,6 +283,7 @@ class GoogleDriveUploader {
           fileName: file.data.name,
           publicUrl,
           durationMs: uploadDuration,
+          tenant_uuid: tenantUuid || "global",
         });
 
         // Log upload to database
@@ -234,6 +297,7 @@ class GoogleDriveUploader {
           uploadDuration,
           attempt,
           status: "success",
+          tenantUuid,
         });
 
         return {
@@ -262,6 +326,7 @@ class GoogleDriveUploader {
           attempt,
           status: "failed",
           error: error.message,
+          tenantUuid: cdrData.tenant_uuid || null,
         });
 
         if (attempt >= maxRetries) {
@@ -300,6 +365,7 @@ class GoogleDriveUploader {
         attempt: logData.attempt,
         status: logData.status,
         error: logData.error || null,
+        tenant_uuid: logData.tenantUuid || null,
         uploaded_at: new Date(),
       };
 
@@ -352,11 +418,6 @@ class GoogleDriveUploader {
    */
   async processRecording(recordingData, cdrData) {
     try {
-      // Ensure initialized
-      if (!this.isInitialized) {
-        await this.initialize();
-      }
-
       // Upload recording
       const uploadResult = await this.uploadRecording(recordingData, cdrData);
 
@@ -373,7 +434,6 @@ class GoogleDriveUploader {
       return null;
     }
   }
-
 }
 
 // Export singleton instance
