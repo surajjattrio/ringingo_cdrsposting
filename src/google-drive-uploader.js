@@ -13,7 +13,6 @@ import googleDriveSettingsManager from "./googledrive/google-drive-settings-mana
 
 class GoogleDriveUploader {
   constructor() {
-    this.driveClients = new Map(); // Cache drive clients per tenant
     this.isInitialized = false;
   }
 
@@ -22,12 +21,6 @@ class GoogleDriveUploader {
    */
   async getDriveClient(tenantUuid = null) {
     try {
-      // Check cache first
-      const cacheKey = tenantUuid || "global";
-      if (this.driveClients.has(cacheKey)) {
-        return this.driveClients.get(cacheKey);
-      }
-
       // Get settings from database
       const settings = await googleDriveSettingsManager.getSettings(tenantUuid);
 
@@ -77,15 +70,11 @@ class GoogleDriveUploader {
         root_folder: rootFolder.data.name,
       });
 
-      // Cache the client
-      const clientData = {
+      return {
         drive,
         oauth2Client,
         rootFolderId: settings.root_folder_id,
       };
-      this.driveClients.set(cacheKey, clientData);
-
-      return clientData;
     } catch (error) {
       logger.error("[GOOGLE_DRIVE] Initialization failed", {
         error: error.message,
@@ -94,25 +83,6 @@ class GoogleDriveUploader {
       });
       throw error;
     }
-  }
-
-  /**
-   * Clear cached client (useful when settings are updated)
-   */
-  clearCache(tenantUuid = null) {
-    const cacheKey = tenantUuid || "global";
-    this.driveClients.delete(cacheKey);
-    logger.info("[GOOGLE_DRIVE] Cache cleared", {
-      tenant_uuid: tenantUuid || "global",
-    });
-  }
-
-  /**
-   * Clear all cached clients
-   */
-  clearAllCache() {
-    this.driveClients.clear();
-    logger.info("[GOOGLE_DRIVE] All cache cleared");
   }
 
   /**
@@ -162,9 +132,9 @@ class GoogleDriveUploader {
   }
 
   /**
-   * Get agent name from user UUID
+   * Get agent name for folder creation only
    */
-  async getAgentName(userUuid) {
+  async getAgentNameForFolder(userUuid) {
     try {
       const db = getDatabase();
       const user = await db
@@ -177,7 +147,7 @@ class GoogleDriveUploader {
 
       return "Unknown";
     } catch (error) {
-      logger.error("[GOOGLE_DRIVE] Failed to get agent name", {
+      logger.error("[GOOGLE_DRIVE] Failed to get agent name for folder", {
         error: error.message,
         userUuid,
       });
@@ -221,8 +191,8 @@ class GoogleDriveUploader {
         const callstartDate = new Date(cdrData.createdAt || cdrData.callstart);
         const dateFolder = callstartDate.toISOString().split("T")[0]; // YYYY-MM-DD
 
-        // Get agent name
-        const agentName = await this.getAgentName(cdrData.user_uuid);
+        // Get agent name only for folder creation
+        const agentNameForFolder = await this.getAgentNameForFolder(cdrData.user_uuid);
 
         // Create folder structure: Date/Agent Name
         const dateFolderId = await this.findOrCreateFolder(
@@ -233,7 +203,7 @@ class GoogleDriveUploader {
 
         const agentFolderId = await this.findOrCreateFolder(
           drive,
-          agentName,
+          agentNameForFolder,
           dateFolderId
         );
 
@@ -253,7 +223,7 @@ class GoogleDriveUploader {
 
         logger.debug("[GOOGLE_DRIVE] Uploading file...", {
           fileName,
-          agentFolder: agentName,
+          agentFolder: agentNameForFolder,
           dateFolder,
           tenant_uuid: tenantUuid || "global",
         });
@@ -292,7 +262,7 @@ class GoogleDriveUploader {
           recordingPath: recordingData.recording_path,
           fileId: file.data.id,
           publicUrl,
-          agentName,
+          agentUuid: cdrData.user_uuid,
           dateFolder,
           uploadDuration,
           attempt,
@@ -320,7 +290,7 @@ class GoogleDriveUploader {
           recordingPath: recordingData.recording_path,
           fileId: null,
           publicUrl: null,
-          agentName: null,
+          agentUuid: null,
           dateFolder: null,
           uploadDuration: Date.now() - uploadStartTime,
           attempt,
@@ -354,26 +324,88 @@ class GoogleDriveUploader {
   async logUpload(logData) {
     try {
       const db = getDatabase();
-      const logEntry = {
+      
+      // Check if document already exists
+      const existingLog = await db.collection("recording_upload_logs").findOne({
         cdr_uuid: logData.cdrUuid,
-        recording_path: logData.recordingPath,
-        file_id: logData.fileId,
-        public_url: logData.publicUrl,
-        agent_name: logData.agentName,
-        date_folder: logData.dateFolder,
-        upload_duration_ms: logData.uploadDuration,
-        attempt: logData.attempt,
-        status: logData.status,
-        error: logData.error || null,
-        tenant_uuid: logData.tenantUuid || null,
-        uploaded_at: new Date(),
-      };
+      });
 
-      await db.collection("recording_upload_logs").insertOne(logEntry);
+      if (existingLog) {
+        // Document exists - just add retry attempt
+        await db.collection("recording_upload_logs").updateOne(
+          { cdr_uuid: logData.cdrUuid },
+          {
+            $push: {
+              retry_attempts: {
+                attempt: logData.attempt,
+                status: logData.status,
+                error: logData.error || null,
+                duration_ms: logData.uploadDuration,
+                timestamp: new Date(),
+              },
+            },
+            $set: {
+              // Update main fields only on success
+              ...(logData.status === "success" && {
+                file_id: logData.fileId,
+                public_url: logData.publicUrl,
+                agent_uuid: logData.agentUuid,
+                date_folder: logData.dateFolder,
+                upload_duration_ms: logData.uploadDuration,
+                status: logData.status,
+                uploaded_at: new Date(),
+              }),
+              // Always update these
+              attempt: logData.attempt,
+              error: logData.error || null,
+            },
+          }
+        );
+
+        logger.debug("[GOOGLE_DRIVE] Upload log updated with retry", {
+          cdrUuid: logData.cdrUuid,
+          attempt: logData.attempt,
+          status: logData.status,
+        });
+      } else {
+        // First attempt - create new document with original structure
+        const logEntry = {
+          cdr_uuid: logData.cdrUuid,
+          recording_path: logData.recordingPath,
+          file_id: logData.fileId,
+          public_url: logData.publicUrl,
+          agent_uuid: logData.agentUuid,
+          date_folder: logData.dateFolder,
+          upload_duration_ms: logData.uploadDuration,
+          attempt: logData.attempt,
+          status: logData.status,
+          error: logData.error || null,
+          tenant_uuid: logData.tenantUuid || null,
+          uploaded_at: new Date(),
+          retry_attempts: [
+            {
+              attempt: logData.attempt,
+              status: logData.status,
+              error: logData.error || null,
+              duration_ms: logData.uploadDuration,
+              timestamp: new Date(),
+            },
+          ],
+        };
+
+        await db.collection("recording_upload_logs").insertOne(logEntry);
+
+        logger.debug("[GOOGLE_DRIVE] Upload log created", {
+          cdrUuid: logData.cdrUuid,
+          attempt: logData.attempt,
+          status: logData.status,
+        });
+      }
     } catch (error) {
       // Don't throw error for logging failures
       logger.error("[GOOGLE_DRIVE] Failed to log upload", {
         error: error.message,
+        cdrUuid: logData.cdrUuid,
       });
     }
   }
