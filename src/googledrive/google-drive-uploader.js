@@ -7,9 +7,9 @@
 import { google } from "googleapis";
 import fs from "fs";
 import path from "path";
-import logger from "./logger.js";
-import { getDatabase } from "./database.js";
-import googleDriveSettingsManager from "./googledrive/google-drive-settings-manager.js";
+import logger from "../logger.js";
+import { getDatabase } from "../database.js";
+import googleDriveSettingsManager from "./google-drive-settings-manager.js";
 
 class GoogleDriveUploader {
   constructor() {
