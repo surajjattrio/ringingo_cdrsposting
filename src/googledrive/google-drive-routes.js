@@ -1,12 +1,16 @@
 /**
  * Google Drive Settings API Routes
  * RESTful API for managing Google Drive configurations
+ * Now includes OAuth 2.0 flow for one-click tenant integration
  */
 
 import express from "express";
+import { google } from "googleapis";
 import googleDriveSettingsManager from "./google-drive-settings-manager.js";
 import logger from "../logger.js";
 import { getDatabase } from "../database.js";
+import dotenv from "dotenv";
+dotenv.config();
 
 const router = express.Router();
 router.use("/google-drive", router);
@@ -33,6 +37,597 @@ function parseDateRange(startDate, endDate) {
   
   return { start, end };
 }
+// ============================================================================
+// OAUTH 2.0 FLOW ENDPOINTS (CLEANED)
+// ============================================================================
+
+/**
+ * @route   POST /api/google-drive/oauth/initiate
+ * @desc    Initiate OAuth flow - generates authorization URL
+ * @access  Admin/Tenant
+ * @body    {
+ *            tenant_uuid: string (required for tenant-specific),
+ *            root_folder_id: string (optional - can be set later),
+ *            client_id: string (optional - uses default if not provided),
+ *            client_secret: string (optional - uses default if not provided)
+ *          }
+ * @returns { authorization_url, state }
+ */
+router.post("/oauth/initiate", validateTenantUuid, async (req, res) => {
+  try {
+    const { tenant_uuid, root_folder_id,} = req.body;
+
+    logger.info("[OAUTH_INITIATE] Starting OAuth flow", { tenant_uuid });
+
+    if (!tenant_uuid) {
+      return res.status(400).json({
+        success: false,
+        message: "tenant_uuid is required for OAuth flow"
+      });
+    }
+
+    // Check for existing settings
+    const existingSettings = await googleDriveSettingsManager.getSettings(tenant_uuid);
+    if (existingSettings) {
+      logger.warn("[OAUTH_INITIATE] Already connected", { tenant_uuid });
+      return res.status(409).json({
+        success: false,
+        message: `Google Drive already connected for tenant: ${tenant_uuid}`,
+        data: {
+          enabled: existingSettings.enabled,
+          root_folder_id: existingSettings.root_folder_id
+        }
+      });
+    }
+
+    const finalClientId =  process.env.GOOGLE_CLIENT_ID;
+    const finalClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+
+    if (!finalClientId || !finalClientSecret) {
+      logger.error("[OAUTH_INITIATE] Missing OAuth credentials");
+      return res.status(500).json({
+        success: false,
+        message: "Google OAuth credentials not configured."
+      });
+    }
+
+    const redirectUri = process.env.OAUTH_CALLBACK_URL
+    // const redirectUri = CALLBACK_URL;
+
+    const oauth2Client = new google.auth.OAuth2(
+      finalClientId,
+      finalClientSecret,
+      redirectUri
+    );
+
+    const state = Buffer.from(JSON.stringify({
+      tenant_uuid,
+      root_folder_id: root_folder_id || null,
+      timestamp: Date.now()
+    })).toString('base64');
+
+    const db = getDatabase();
+    
+    // Store OAuth session
+    const sessionData = {
+      state,
+      tenant_uuid,
+      root_folder_id: root_folder_id || null,
+      client_id: finalClientId,
+      client_secret: finalClientSecret,
+      redirect_uri: redirectUri,
+      created_at: new Date(),
+      expires_at: new Date(Date.now() + 60 * 60 * 1000), // 60 minutes
+      status: "pending"
+    };
+
+    await db.collection("google_drive_oauth_pending").insertOne(sessionData);
+
+    // Create TTL index if not exists
+    try {
+      await db.collection("google_drive_oauth_pending").createIndex(
+        { expires_at: 1 },
+        { expireAfterSeconds: 0 }
+      );
+    } catch (indexError) {
+      // Index already exists, ignore
+    }
+
+    const authorizationUrl = oauth2Client.generateAuthUrl({
+      access_type: 'offline',
+      scope: [
+        'https://www.googleapis.com/auth/drive.file',
+        'https://www.googleapis.com/auth/drive.readonly'
+      ],
+      state,
+      prompt: 'consent'
+    });
+
+    logger.info("[OAUTH_INITIATE] Session created successfully", { tenant_uuid });
+
+    res.json({
+      success: true,
+      message: "OAuth flow initiated",
+      data: {
+        authorization_url: authorizationUrl,
+        state,
+        redirect_uri: redirectUri,
+        expires_in_seconds: 3600
+      }
+    });
+
+  } catch (error) {
+    logger.error("[OAUTH_INITIATE] Failed to initiate OAuth", { 
+      error: error.message,
+      stack: error.stack 
+    });
+    
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/**
+ * @route   GET /api/google-drive/oauth/callback
+ * @desc    Handle OAuth callback from Google
+ */
+router.get("/oauth/callback", async (req, res) => {
+  try {
+    const { code, state, error } = req.query;
+
+    logger.info("[OAUTH_CALLBACK] Received callback", { 
+      has_code: !!code, 
+      has_state: !!state, 
+      google_error: error 
+    });
+
+    if (error) {
+      logger.error("[OAUTH_CALLBACK] Google OAuth error", { error });
+      return res.status(400).json({
+        success: false,
+        error: "oauth_error",
+        message: `Google OAuth error: ${error}`
+      });
+    }
+
+    if (!code || !state) {
+      logger.error("[OAUTH_CALLBACK] Missing required parameters", { has_code: !!code, has_state: !!state });
+      return res.status(400).json({
+        success: false,
+        error: "missing_parameters",
+        message: "Missing required parameters: code or state"
+      });
+    }
+
+    // Decode state
+    let stateData;
+    try {
+      stateData = JSON.parse(Buffer.from(state, 'base64').toString());
+    } catch (decodeError) {
+      logger.error("[OAUTH_CALLBACK] Failed to decode state", { error: decodeError.message });
+      return res.status(400).json({
+        success: false,
+        error: "invalid_state",
+        message: "Invalid state parameter"
+      });
+    }
+
+    const { tenant_uuid } = stateData;
+    const db = getDatabase();
+
+    // Find pending session
+    let pendingSession = await db.collection("google_drive_oauth_pending").findOne({
+      state,
+      status: "pending"
+    });
+
+    if (!pendingSession) {
+      // Check if session exists with different status
+      pendingSession = await db.collection("google_drive_oauth_pending").findOne({ state });
+      
+      if (!pendingSession) {
+        logger.error("[OAUTH_CALLBACK] Session not found", { tenant_uuid });
+        return res.status(400).json({
+          success: false,
+          error: "invalid_state",
+          message: "Invalid or expired OAuth session. Please try connecting again."
+        });
+      }
+
+      if (new Date() > new Date(pendingSession.expires_at)) {
+        logger.error("[OAUTH_CALLBACK] Session expired", { tenant_uuid });
+        return res.status(400).json({
+          success: false,
+          error: "session_expired",
+          message: "OAuth session has expired. Please try connecting again."
+        });
+      }
+      
+      if (pendingSession.status === "awaiting_folder_selection") {
+        logger.warn("[OAUTH_CALLBACK] Session already processed", { tenant_uuid });
+        return res.json({
+          success: true,
+          message: "Authorization already processed. Please select your upload folder.",
+          data: {
+            state,
+            tenant_uuid: pendingSession.tenant_uuid,
+            has_refresh_token: !!pendingSession.refresh_token
+          }
+        });
+      }
+      
+      if (pendingSession.status === "completed") {
+        logger.warn("[OAUTH_CALLBACK] OAuth already completed", { tenant_uuid });
+        return res.status(400).json({
+          success: false,
+          error: "already_completed",
+          message: "OAuth flow already completed for this session."
+        });
+      }
+    }
+
+    // Exchange code for tokens
+    const oauth2Client = new google.auth.OAuth2(
+      pendingSession.client_id,
+      pendingSession.client_secret,
+      pendingSession.redirect_uri
+    );
+
+    let tokens;
+    try {
+      const { tokens: retrievedTokens } = await oauth2Client.getToken(code);
+      tokens = retrievedTokens;
+      logger.info("[OAUTH_CALLBACK] Tokens received", { 
+        tenant_uuid,
+        has_refresh_token: !!tokens.refresh_token 
+      });
+    } catch (tokenError) {
+      logger.error("[OAUTH_CALLBACK] Token exchange failed", { 
+        tenant_uuid,
+        error: tokenError.message,
+        response: tokenError.response?.data 
+      });
+      throw tokenError;
+    }
+
+    if (!tokens.refresh_token) {
+      logger.warn("[OAUTH_CALLBACK] No refresh_token received", { tenant_uuid });
+    }
+
+    // Update session with tokens
+    await db.collection("google_drive_oauth_pending").updateOne(
+      { state },
+      {
+        $set: {
+          refresh_token: tokens.refresh_token,
+          access_token: tokens.access_token,
+          token_expiry: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+          status: "awaiting_folder_selection",
+          updated_at: new Date()
+        }
+      }
+    );
+
+    logger.info("[OAUTH_CALLBACK] Session updated successfully", { tenant_uuid });
+
+    res.json({
+      success: true,
+      message: "Authorization successful. Please select your upload folder.",
+      data: {
+        state,
+        tenant_uuid: pendingSession.tenant_uuid,
+        has_refresh_token: !!tokens.refresh_token
+      }
+    });
+
+  } catch (error) {
+    logger.error("[OAUTH_CALLBACK] Callback processing error", { 
+      error: error.message,
+      stack: error.stack 
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: "callback_processing_error",
+      message: "Failed to process OAuth callback",
+      details: error.message
+    });
+  }
+});
+
+/**
+ * @route   GET /api/google-drive/oauth/folders
+ * @desc    List folders from Google Drive (after OAuth callback, before completion)
+ * @query   state - State token from callback
+ * @returns List of folders user can select
+ */
+router.get("/oauth/folders", async (req, res) => {
+  try {
+    const { state } = req.query;
+
+    if (!state) {
+      return res.status(400).json({
+        success: false,
+        message: "state parameter is required"
+      });
+    }
+
+    // Get pending OAuth with tokens
+    const db = getDatabase();
+    const pendingOAuth = await db.collection("google_drive_oauth_pending").findOne({
+      state,
+      status: "awaiting_folder_selection"
+    });
+
+    if (!pendingOAuth) {
+      logger.warn("[OAUTH_FOLDERS] Invalid or expired session");
+      return res.status(400).json({
+        success: false,
+        error: "invalid_state",
+        message: "Invalid state or session expired. Please restart OAuth flow."
+      });
+    }
+
+    const { client_id, client_secret, redirect_uri, refresh_token, access_token } = pendingOAuth;
+
+    // Create OAuth2 client with stored tokens
+    const oauth2Client = new google.auth.OAuth2(
+      client_id,
+      client_secret,
+      redirect_uri
+    );
+
+    oauth2Client.setCredentials({
+      refresh_token,
+      access_token
+    });
+
+    // Get Drive client
+    const drive = google.drive({ version: "v3", auth: oauth2Client });
+
+    // List folders in user's Drive
+    const response = await drive.files.list({
+      q: "mimeType='application/vnd.google-apps.folder' and trashed=false",
+      fields: "files(id, name, parents, createdTime, modifiedTime, webViewLink)",
+      orderBy: "name",
+      pageSize: 100
+    });
+
+    logger.info("[OAUTH_FOLDERS] Folders listed successfully", {
+      tenant_uuid: pendingOAuth.tenant_uuid,
+      folder_count: response.data.files.length
+    });
+
+    res.json({
+      success: true,
+      data: {
+        folders: response.data.files,
+        tenant_uuid: pendingOAuth.tenant_uuid
+      }
+    });
+
+  } catch (error) {
+    logger.error("[OAUTH_FOLDERS] Failed to list folders", { error: error.message });
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/**
+ * @route   POST /api/google-drive/oauth/complete
+ * @desc    Complete OAuth flow after user selects folder
+ * @body    { state: string, root_folder_id: string }
+ * @returns Success confirmation
+ */
+router.post("/oauth/complete", async (req, res) => {
+  try {
+    const { state, root_folder_id } = req.body;
+
+    if (!state || !root_folder_id) {
+      return res.status(400).json({
+        success: false,
+        message: "state and root_folder_id are required"
+      });
+    }
+
+    // Get pending OAuth with tokens
+    const db = getDatabase();
+    const pendingOAuth = await db.collection("google_drive_oauth_pending").findOne({
+      state,
+      status: "awaiting_folder_selection"
+    });
+
+    if (!pendingOAuth) {
+      logger.warn("[OAUTH_COMPLETE] Invalid or expired session");
+      return res.status(400).json({
+        success: false,
+        error: "invalid_state",
+        message: "Invalid state or session expired. Please restart OAuth flow."
+      });
+    }
+
+    const { tenant_uuid, client_id, client_secret, redirect_uri, refresh_token } = pendingOAuth;
+
+    // Verify folder exists and is accessible
+    try {
+      const oauth2Client = new google.auth.OAuth2(
+        client_id,
+        client_secret,
+        redirect_uri
+      );
+
+      oauth2Client.setCredentials({
+        refresh_token
+      });
+
+      const drive = google.drive({ version: "v3", auth: oauth2Client });
+      
+      // Verify folder
+      const folderInfo = await drive.files.get({
+        fileId: root_folder_id,
+        fields: "id, name, webViewLink"
+      });
+
+      // Save settings to database
+      await googleDriveSettingsManager.createSettings({
+        tenant_uuid,
+        client_id,
+        client_secret,
+        refresh_token,
+        root_folder_id,
+        redirect_uri,
+        enabled: true
+      });
+
+      // Mark OAuth as completed
+      await db.collection("google_drive_oauth_pending").updateOne(
+        { state },
+        { 
+          $set: { 
+            status: "completed",
+            root_folder_id,
+            completed_at: new Date()
+          } 
+        }
+      );
+
+      logger.info("[OAUTH_COMPLETE] OAuth flow completed successfully", {
+        tenant_uuid,
+        root_folder_id,
+        folder_name: folderInfo.data.name
+      });
+
+      res.json({
+        success: true,
+        message: "Google Drive connected successfully",
+        data: {
+          tenant_uuid,
+          root_folder_id,
+          root_folder_name: folderInfo.data.name,
+          root_folder_link: folderInfo.data.webViewLink,
+          enabled: true,
+          connected_at: new Date()
+        }
+      });
+
+    } catch (driveError) {
+      logger.error("[OAUTH_COMPLETE] Failed to verify folder", {
+        tenant_uuid,
+        error: driveError.message,
+        root_folder_id
+      });
+
+      return res.status(400).json({
+        success: false,
+        error: "invalid_folder",
+        message: "Unable to access the selected folder. Please ensure you have permission to access it."
+      });
+    }
+
+  } catch (error) {
+    logger.error("[OAUTH_COMPLETE] Failed to complete OAuth", { error: error.message });
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/**
+ * @route   GET /api/google-drive/oauth/status
+ * @desc    Check OAuth connection status for tenant
+ * @query   tenant_uuid (required)
+ * @returns Connection status and details
+ */
+router.get("/oauth/status", async (req, res) => {
+  try {
+    const { tenant_uuid } = req.query;
+
+    if (!tenant_uuid) {
+      return res.status(400).json({
+        success: false,
+        message: "tenant_uuid is required"
+      });
+    }
+
+    logger.info("[OAUTH_STATUS] Checking status", { tenant_uuid });
+
+    const db = getDatabase();
+    
+    // Check for completed OAuth connection
+    const settings = await googleDriveSettingsManager.getSettings(tenant_uuid);
+    
+    if (settings) {
+      logger.info("[OAUTH_STATUS] Found completed connection", { tenant_uuid });
+      return res.json({
+        success: true,
+        data: {
+          connected: true,
+          status: 'completed',
+          enabled: settings.enabled,
+          root_folder_id: settings.root_folder_id
+        }
+      });
+    }
+
+    // Check for pending/in-progress sessions
+    const pendingSession = await db.collection("google_drive_oauth_pending")
+      .findOne(
+        { 
+          tenant_uuid, 
+          status: { $in: ['awaiting_folder_selection', 'pending'] },
+          expires_at: { $gt: new Date() }
+        },
+        { sort: { created_at: -1 } }
+      );
+
+    if (pendingSession) {
+      logger.info("[OAUTH_STATUS] Found pending session", { 
+        tenant_uuid,
+        status: pendingSession.status 
+      });
+      
+      return res.json({
+        success: true,
+        data: {
+          connected: false,
+          status: pendingSession.status,
+          state: pendingSession.state,
+          has_refresh_token: !!pendingSession.refresh_token,
+          created_at: pendingSession.created_at,
+          expires_at: pendingSession.expires_at
+        }
+      });
+    }
+
+    // No connection found
+    logger.info("[OAUTH_STATUS] No active connection found", { tenant_uuid });
+    
+    res.json({
+      success: true,
+      data: {
+        connected: false,
+        status: 'not_connected'
+      }
+    });
+
+  } catch (error) {
+    logger.error("[OAUTH_STATUS] Status check failed", { 
+      error: error.message,
+      stack: error.stack 
+    });
+    
+    res.status(500).json({
+      success: false,
+      message: error.message,
+      error: 'status_check_failed'
+    });
+  }
+});
 
 /**
  * @route   GET /api/google-drive/analytics/upload-activity
@@ -267,7 +862,6 @@ router.get("/settings", validateTenantUuid, async (req, res) => {
 /**
  * @route   GET /api/google-drive/settings/list
  * @desc    List all Google Drive settings (all tenants)
- * @access  Super Admin
  */
 router.get("/settings/list", async (req, res) => {
   try {
@@ -383,8 +977,6 @@ router.delete("/settings", validateTenantUuid, async (req, res) => {
 /**
  * @route   POST /api/google-drive/test-connection
  * @desc    Test Google Drive connection
- * @access  Admin
- * @body    { tenant_uuid: string (optional) }
  */
 router.post("/test-connection", validateTenantUuid, async (req, res) => {
   try {
@@ -581,11 +1173,6 @@ router.get("/recordings", async (req, res) => {
         const recording = await db.collection("recording")
           .findOne({ uuid: log.cdr_uuid });
 
-        // Get CDR details for more info
-        const cdr = await db.collection("cdrs")
-          .findOne({ uuid: log.cdr_uuid });
-
-        // Get agent name from the map
         const agentInfo = userMap.get(log.agent_uuid) || { username: 'Unknown' };
 
         return {
