@@ -1051,6 +1051,16 @@ app.post("/cdrs", async (req, res) => {
       variablesValue.effective_destination_number ||
       dialedUser;
 
+    if (!destinationNumber || destinationNumber === "undefined") {
+      destinationNumber =
+        variablesValue["Caller-Destination-Number"] ||
+        variablesValue["sip_h_P-cb_destination"] ||
+        "";
+      logger.warn("[CDR] Destination number was undefined, using fallback", {
+        destinationNumber,
+      });
+    }
+    
     let disposition = variablesValue.hangup_cause || "NORMAL_CLEARING";
     let callState = "normal";
 
@@ -1218,8 +1228,11 @@ app.post("/cdrs", async (req, res) => {
 
     if (autoCampaignCheck === "true") {
       logger.debug("[CDR] Auto campaign CHANGE Destination");
-      destinationNumber =
-        variablesValue["sip_h_P-original_number"] || destinationNumber;
+      const originalNumber = variablesValue["sip_h_P-original_number"];
+      // Only update if originalNumber exists and is not "undefined" string
+      if (originalNumber && originalNumber !== "undefined") {
+        destinationNumber = originalNumber;
+      }
       callerIdName = variablesValue["Hunt-Callee-ID-Name"] || callerIdName;
       callerIdNumber =
         variablesValue["Hunt-Orig-Caller-ID-Number"] || callerIdNumber;
@@ -1394,6 +1407,7 @@ app.post("/cdrs", async (req, res) => {
         waiting_time: waitsecond,
         total_duration: totalduration,
         ringing_time: ringingsecond,
+        ivr_feedback_score: feedbackScore,
       };
 
       logger.debug("[CDR_PROCESSING] First harsh CDR Insert", {
@@ -1618,6 +1632,7 @@ app.post("/cdrs", async (req, res) => {
         waiting_time: waitsecond,
         total_duration: totalduration,
         ringing_time: ringingsecond,
+        ivr_feedback_score: feedbackScore,
       };
 
       await collections.cdrs.insertOne(insertSecondLegCdrJson);
