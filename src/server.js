@@ -422,7 +422,7 @@ async function getVoicebroadcastDisposition(
   try {
     const filterCodes = {
       0: "SURVEY",
-      1: "IVR",
+      1: "OBDC",
       2: "NI",
       3: "DNC",
       CANCEL: "NA",
@@ -877,7 +877,8 @@ app.post("/cdrs", async (req, res) => {
     const tenantUuid =
       variablesValue.tenant_uuid || variablesValue["sip_h_P-tenant_uuid"] || "";
 
-    let direction = variablesValue.direction || "outbound";
+    let direction = variablesValue.direction || "";
+    let isInboundCall = variablesValue["sip_h_X-inbound_campaign_flag"];
     const bridgeUuid = variablesValue.bridge_uuid || uuidv4();
 
     let userUuid =
@@ -1049,7 +1050,9 @@ app.post("/cdrs", async (req, res) => {
     let destinationNumber =
       variablesValue.custom_destination_number ||
       variablesValue.effective_destination_number ||
-      dialedUser;
+      dialedUser ||
+      variablesValue["Caller-Destination-Number"] ||
+      variablesValue["sip_h_P-cb_destination"];
 
     if (!destinationNumber || destinationNumber === "undefined") {
       destinationNumber =
@@ -1096,9 +1099,13 @@ app.post("/cdrs", async (req, res) => {
     const callStateMain =
       disposition === "ORIGINATOR_CANCEL" ? "normal" : callState;
 
-    let callType = variablesValue.call_type || "standard";
-    if (["standard", "did"].includes(callType)) {
-      direction = "outbound";
+    // let callType = variablesValue.call_type || "standard";
+    // if (["standard", "did"].includes(callType)) {
+    //   direction = "outbound";
+    // }
+
+    if (isInboundCall == "true") {
+      direction = "inbound";
     }
 
     let recordingPath = "";
@@ -1140,7 +1147,8 @@ app.post("/cdrs", async (req, res) => {
         const recordingDirectory = variablesValue.recording_directory || "";
 
         if (recordingUuid) {
-          recordingPath = `${recordingDirectory}/${recordingDialedUser}_${recordingUuid}.wav`;
+          // recordingPath = `${recordingDirectory}/${recordingDialedUser}_${recordingUuid}.wav`;
+          recordingPath = `${recordingUuid}.wav`;
         }
       }
     }
@@ -1154,9 +1162,9 @@ app.post("/cdrs", async (req, res) => {
       billsecond = 0;
     }
 
-    if (receiverExtensionUuid) {
-      direction = "outbound";
-    }
+    // if (receiverExtensionUuid) {
+    //   direction = "outbound";
+    // }
 
     let incomingExtraEntryFlag = 0;
     const callMode = campaignUuid ? "1" : "0";
@@ -1204,8 +1212,8 @@ app.post("/cdrs", async (req, res) => {
       variablesValue["sip_h_P-predictive_campaign"] || "";
 
     if (predictiveCampaign === "true") {
-      destinationNumber =
-        variablesValue["sip_h_P-original_number"] || destinationNumber;
+      // destinationNumber =
+      //   variablesValue["sip_h_P-original_number"] || destinationNumber;
       const predictiveFlag = autoCallFlag === "1" ? "0" : "1";
       const predictiveUuid = uuidv4();
 
@@ -1228,11 +1236,11 @@ app.post("/cdrs", async (req, res) => {
 
     if (autoCampaignCheck === "true") {
       logger.debug("[CDR] Auto campaign CHANGE Destination");
-      const originalNumber = variablesValue["sip_h_P-original_number"];
+      // const originalNumber = variablesValue["sip_h_P-original_number"];
       // Only update if originalNumber exists and is not "undefined" string
-      if (originalNumber && originalNumber !== "undefined") {
-        destinationNumber = originalNumber;
-      }
+      // if (originalNumber && originalNumber !== "undefined") {
+      //    destinationNumber = originalNumber;
+      // }
       callerIdName = variablesValue["Hunt-Callee-ID-Name"] || callerIdName;
       callerIdNumber =
         variablesValue["Hunt-Orig-Caller-ID-Number"] || callerIdNumber;
@@ -1246,25 +1254,74 @@ app.post("/cdrs", async (req, res) => {
     logger.debug("[CDR] Hangup direction", { direction });
 
     let disconnectedBy = "";
-    if (hangupPartyDisposition === "send_bye") {
-      disconnectedBy = direction === "inbound" ? "0" : "1";
-    } else if (hangupPartyDisposition === "recv_bye") {
-      disconnectedBy = direction === "inbound" ? "1" : "0";
-    } else if (hangupPartyDisposition === "recv_cancel") {
-      disconnectedBy = direction === "inbound" ? "1" : "0";
-    } else if (hangupPartyDisposition === "send_refuse") {
-      disconnectedBy = direction === "inbound" ? "0" : "1";
+    // if (hangupPartyDisposition === "send_bye") {
+    //   disconnectedBy = direction === "inbound" ? "0" : "1";
+    // } else if (hangupPartyDisposition === "recv_bye") {
+    //   disconnectedBy = direction === "inbound" ? "1" : "0";
+    // } else if (hangupPartyDisposition === "recv_cancel") {
+    //   disconnectedBy = direction === "inbound" ? "1" : "0";
+    // } else if (hangupPartyDisposition === "send_refuse") {
+    //   disconnectedBy = direction === "inbound" ? "0" : "1";
+    // }
+    // Initialize variables (assuming these come from your call record object)
+
+    if (hangupPartyDisposition === "recv_bye" && direction === "outbound") {
+      disconnectedBy = "1";
+    } else if (
+      hangupPartyDisposition === "send_bye" &&
+      direction === "outbound"
+    ) {
+      disconnectedBy = "0";
+    } else if (
+      hangupPartyDisposition === "recv_cancel" &&
+      direction === "outbound"
+    ) {
+      disconnectedBy = "1";
+    } else if (
+      hangupPartyDisposition === "recv_refuse" &&
+      direction === "outbound"
+    ) {
+      disconnectedBy = "1";
+    } else if (
+      hangupPartyDisposition === "recv_cancel" &&
+      isInboundCall === "false" &&
+      direction === "inbound"
+    ) {
+      direction = "outbound";
+      disconnectedBy = "0";
+    } else if (
+      hangupPartyDisposition === "send_refuse" &&
+      isInboundCall === "false" &&
+      direction === "inbound"
+    ) {
+      direction = "outbound";
+      disconnectedBy = "2"; // auto hangup from agent side.
+    } else if (
+      hangupPartyDisposition === "recv_bye" &&
+      direction === "inbound"
+    ) {
+      disconnectedBy = "1";
+    } else if (
+      hangupPartyDisposition === "send_bye" &&
+      direction === "inbound"
+    ) {
+      disconnectedBy = "0";
+    } else if (
+      hangupPartyDisposition === "recv_refuse" &&
+      direction === "inbound"
+    ) {
+      disconnectedBy = "0";
     }
 
     logger.debug("[CDR_PROCESSING] Disconnected by", { disconnectedBy });
 
     const telecomCircle = await getTelecomCircle(
       tenantUuid,
-      direction === "outbound" ? destinationNumber : callerIdNumber
+      direction === "outbound" ? destinationNumber : callerIdNumber,
     );
 
     // Inbound CDR insertion
-    if (ipMapUuid || !userUuid) {
+    if (ipMapUuid || !userUuid || !voiceBroadcast) {
       incomingExtraEntryFlag = 1;
 
       if (variablesValue.sip_from_user) {
@@ -1420,10 +1477,88 @@ app.post("/cdrs", async (req, res) => {
     // Handle IVR timeout and call queue timeout
     if (
       ["IVR_TIMEOUT", "CALLQUEUE_TIMEOUT"].includes(disposition) ||
-      ivrMenuStatus
+      (ivrMenuStatus && ivrMenuStatus !== "success")
     ) {
+      // ,,,,,,,,,,,,,,,,
+
+      logger.debug("insidedeee dispostion time out data", destination_number);
+
+      // String manipulation
+      let normalized = String(destinationNumber).split("_")[0];
+      normalized = normalized.replace(/^\+/, ""); // equivalent to lstrip("+")
+
+      const db_call_id = `+${normalized}`;
+      logger.debug(
+        "insidedeee dispostion callllllllllll",
+        db_call_id,
+        "normalllll",
+        normalized,
+      );
+
+      // Find one with OR condition collections.cdrs.insertOne(insertCdrJsonIncoming)
+      const blended_data = await collections.blendedCampaign.findOne({
+        $or: [
+          { call_id_value: db_call_id },
+          { call_id_value: `+${normalized}` },
+        ],
+      });
+
+      if (blended_data) {
+        const campaign_uuid = blended_data.uuid;
+
+        logger.debug(
+          leadUuid,
+          " insidedeee dispostion time out data ",
+          campaign_uuid,
+          " :lead group: ",
+          blended_data.lead_group_uuid,
+        );
+
+        // Update with upsert
+        await collections.leadsInQueue.updateOne(
+          { lead_management_uuid: leadUuid },
+          {
+            $set: {
+              tenant_uuid: tenantUuid,
+              lead_group_uuid: blended_data.lead_group_uuid,
+              campaign_uuid: campaign_uuid,
+              lead_sent: "1",
+              agent_uuid: [],
+              createdAt: createdAt,
+              updatedAt: createdAt,
+            },
+          },
+          { upsert: true },
+        );
+
+        logger.debug("insidedeee dispostion time out data 2 leads in queueee");
+
+        const filter = { code: "QUMS", tenant_uuid: tenantUuid };
+        const disposition_collection_data =
+          await collections.disposition.findOne(filter);
+
+        let disposition_uuid = "";
+        if (disposition_collection_data) {
+          disposition_uuid = disposition_collection_data.disposition_uuid;
+        }
+
+        if (!hangupCause) {
+          await collections.leadManagement.updateOne(
+            { lead_management_uuid: leadUuid },
+            {
+              $set: {
+                lead_status: disposition_uuid,
+                lead_group_uuid: blended_data.lead_group_uuid,
+                campaign_uuid: campaign_uuid,
+              },
+            },
+          );
+        }
+      }
+
+      // '''''''''''''''''''''
       const incomingBridgeUuid = bridgeUuid + "incoming";
-      direction = "inbound";
+      // direction = "inbound";
 
       const insertCdrJsonIncoming = {
         uuid: incomingBridgeUuid,
@@ -1578,16 +1713,16 @@ app.post("/cdrs", async (req, res) => {
 
     // Handle receiver extension UUID (local call - second leg)
     if (receiverExtensionUuid) {
-      direction = "inbound";
-      disconnectedBy = "";
+      // direction = "inbound";
+      // disconnectedBy = "";
 
-      if (hangupPartyDisposition === "send_bye") {
-        disconnectedBy = direction === "inbound" ? "0" : "1";
-      } else if (["recv_bye", "recv_cancel"].includes(hangupPartyDisposition)) {
-        disconnectedBy = direction === "inbound" ? "1" : "0";
-      } else if (hangupPartyDisposition === "send_refuse") {
-        disconnectedBy = direction === "inbound" ? "0" : "1";
-      }
+      // if (hangupPartyDisposition === "send_bye") {
+      //   disconnectedBy = direction === "inbound" ? "0" : "1";
+      // } else if (["recv_bye", "recv_cancel"].includes(hangupPartyDisposition)) {
+      //   disconnectedBy = direction === "inbound" ? "1" : "0";
+      // } else if (hangupPartyDisposition === "send_refuse") {
+      //   disconnectedBy = direction === "inbound" ? "0" : "1";
+      // }
 
       logger.debug("[CDR] Inbound disconnected by", { disconnectedBy });
 
@@ -1776,7 +1911,7 @@ app.post("/cdrs", async (req, res) => {
       if (extensionsResult && extensionsResult.uuid) {
         extensionUuid = extensionsResult.uuid;
         userUuid = extensionsResult.user_uuid;
-        direction = "inbound";
+        // direction = "inbound";
         const sipCallId = variablesValue.sip_call_id || customCallid;
 
         if (
@@ -2054,6 +2189,166 @@ app.post("/cdrs", async (req, res) => {
         });
       }
     }
+
+// voicebroadcast cdr processing
+    if (voiceBroadcast) {
+      const voicebroadcastType = variablesValue["sip_h_P-voicebroadcast_type"] || "";
+      let insertBroadcastString = "";
+      let mainLeadDisposition = "";
+      const broadcastUuid = uuidv4();
+
+      logger.debug("[CDR] Voicebroadcast type", { voicebroadcastType });
+
+      if (voicebroadcastType === "0") {
+        // Broadcast type = Survey
+        const surveyString = variablesValue["sip_h-p_survey_string"] || "";
+        const surveyDisposition = await getVoicebroadcastDisposition(
+          voicebroadcastType,
+          leadUuid,
+          campaignUuid,
+          billsecond
+        );
+        
+        mainLeadDisposition = String(surveyDisposition);
+        insertBroadcastString = {
+          createdAt,
+          callstart,
+          destination_number: destinationNumber,
+          caller_id_number: callerIdNumber,
+          billsecond,
+          total_duration: totalduration,
+          ringing_time: ringingsecond,
+          type: voicebroadcastType,
+          disposition_uuid: mainLeadDisposition,
+          voicebroadcast_uuid: campaignUuid,
+          tenant_uuid: tenantUuid,
+          lead_uuid: leadUuid,
+          survey_details: surveyString,
+          uuid: broadcastUuid,
+        };
+      } else if (voicebroadcastType === "1") {
+        // Broadcast type = IVR
+        const dialedDigits = String(variablesValue["digits_dialed"] || "");
+        const skipFlag = String(variablesValue["sip_h_P-skip_flag"] || "");
+        
+        // let digits = skipFlag === "true" ? dialedDigits.slice(1) : dialedDigits;
+        
+        // Note: The Python logic used feedbackScore/pressed_digits interchangeably here
+        const pressedDigits = feedbackScore || "";
+
+        const ivrDisposition = await getVoicebroadcastDisposition(
+          voicebroadcastType,
+          leadUuid,
+          campaignUuid,
+          billsecond
+        );
+
+        mainLeadDisposition = String(ivrDisposition);
+        insertBroadcastString = {
+          callstart,
+          destination_number: destinationNumber,
+          caller_id_number: callerIdNumber,
+          billsecond,
+          total_duration: totalduration,
+          ringing_time: ringingsecond,
+          type: voicebroadcastType,
+          DTMF: String(pressedDigits),
+          hangup_cause: mainLeadDisposition,
+          voicebroadcast_uuid: campaignUuid,
+          tenant_uuid: tenantUuid,
+          lead_uuid: leadUuid,
+          uuid: broadcastUuid,
+          createdAt,
+        };
+      } else if (voicebroadcastType === "2") {
+        // Broadcast type = Not Interested
+        const niDisposition = await getVoicebroadcastDisposition(
+          voicebroadcastType,
+          leadUuid,
+          campaignUuid,
+          billsecond
+        );
+        mainLeadDisposition = String(niDisposition);
+        insertBroadcastString = {
+          callstart,
+          destination_number: destinationNumber,
+          caller_id_number: callerIdNumber,
+          billsecond,
+          total_duration: totalduration,
+          ringing_time: ringingsecond,
+          type: voicebroadcastType,
+          disposition_uuid: mainLeadDisposition,
+          voicebroadcast_uuid: campaignUuid,
+          tenant_uuid: tenantUuid,
+          lead_uuid: leadUuid,
+          uuid: broadcastUuid,
+          createdAt,
+        };
+      } else if (voicebroadcastType === "3") {
+        // Broadcast type = DNC
+        const dncDisposition = await getVoicebroadcastDisposition(
+          voicebroadcastType,
+          leadUuid,
+          campaignUuid,
+          billsecond
+        );
+        mainLeadDisposition = String(dncDisposition);
+        insertBroadcastString = {
+          callstart,
+          destination_number: destinationNumber,
+          caller_id_number: callerIdNumber,
+          billsecond,
+          total_duration: totalduration,
+          ringing_time: ringingsecond,
+          type: voicebroadcastType,
+          disposition_uuid: mainLeadDisposition,
+          voicebroadcast_uuid: campaignUuid,
+          tenant_uuid: tenantUuid,
+          lead_uuid: leadUuid,
+          uuid: broadcastUuid,
+          createdAt,
+        };
+      } else if (voicebroadcastType === "") {
+        let hangupCauseVar = variablesValue["sip_invite_failure_phrase"] || "";
+        if (hangupCauseVar === "") {
+          hangupCauseVar = variablesValue["sip_hangup_disposition"] || "";
+        }
+
+        if (hangupCauseVar !== "") {
+          const hangupDisposition = await getVoicebroadcastDisposition(
+            hangupCauseVar,
+            leadUuid,
+            campaignUuid,
+            billsecond
+          );
+          mainLeadDisposition = String(hangupDisposition);
+          insertBroadcastString = {
+            callstart,
+            destination_number: destinationNumber,
+            caller_id_number: callerIdNumber,
+            billsecond,
+            type: "",
+            disposition_uuid: mainLeadDisposition,
+            voicebroadcast_uuid: campaignUuid,
+            tenant_uuid: tenantUuid,
+            lead_uuid: leadUuid,
+            uuid: broadcastUuid,
+            createdAt,
+          };
+        }
+      }
+
+      if (insertBroadcastString !== "") {
+        await collections.voiceBroadcastDetails.insertOne(insertBroadcastString);
+        logger.debug("[CDR] Voicebroadcast details inserted");
+
+        await collections.leadManagement.updateOne(
+          { lead_management_uuid: leadUuid },
+          { $set: { lead_status: mainLeadDisposition } }
+        );
+      }
+    }
+    // voicebroadcast cdr processing end
     logger.info("==============================");
     logger.success("[CDR] CDR Processing Completed Successfully");
     logger.info("==============================\n");

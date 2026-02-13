@@ -101,7 +101,8 @@ function getCollections() {
         telecomCircle: database.collection('telecom_circle'),
         voiceBroadcast: database.collection('voice_broadcast'),
         agentLiveReport: database.collection('agent_live_report'),
-        ipMap: database.collection('ip_map')
+        ipMap: database.collection('ip_map'),
+        voiceBroadcastDetails: database.collection('voice_broadcast_details'),
     };
 }
 
