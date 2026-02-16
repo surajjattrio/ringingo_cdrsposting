@@ -685,7 +685,7 @@ async function getTelecomCircle(tenantUuid, destinationNumber) {
     while (destNumber) {
       const filter = {
         tenant_uuid: tenantUuid,
-        prefix: { $regex: "^" + firstDigit },
+        prefix: { $regex: "^" + firstDigit.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") },
       };
 
       const results = await collections.telecomCircle.find(filter).toArray();
@@ -1099,7 +1099,7 @@ app.post("/cdrs", async (req, res) => {
     const callStateMain =
       disposition === "ORIGINATOR_CANCEL" ? "normal" : callState;
 
-    // let callType = variablesValue.call_type || "standard";
+    let callType = variablesValue.call_type || "standard";
     // if (["standard", "did"].includes(callType)) {
     //   direction = "outbound";
     // }
@@ -1321,7 +1321,7 @@ app.post("/cdrs", async (req, res) => {
     );
 
     // Inbound CDR insertion
-    if (ipMapUuid || !userUuid || !voiceBroadcast) {
+    if (ipMapUuid || !userUuid || voiceBroadcast !== "") {
       incomingExtraEntryFlag = 1;
 
       if (variablesValue.sip_from_user) {
