@@ -878,7 +878,8 @@ app.post("/cdrs", async (req, res) => {
       variablesValue.tenant_uuid || variablesValue["sip_h_P-tenant_uuid"] || "";
 
     let direction = variablesValue.direction || "";
-    let isInboundCall = variablesValue["sip_h_X-inbound_campaign_flag"];
+    let isInboundCall =
+      variablesValue["sip_h_X-inbound_campaign_flag"] || "false";
     const bridgeUuid = variablesValue.bridge_uuid || uuidv4();
 
     let userUuid =
@@ -1264,7 +1265,7 @@ app.post("/cdrs", async (req, res) => {
     //   disconnectedBy = direction === "inbound" ? "0" : "1";
     // }
     // Initialize variables (assuming these come from your call record object)
-
+    //  0 - Agent , 1 - Customer
     if (hangupPartyDisposition === "recv_bye" && direction === "outbound") {
       disconnectedBy = "1";
     } else if (
@@ -1286,6 +1287,20 @@ app.post("/cdrs", async (req, res) => {
       hangupPartyDisposition === "recv_cancel" &&
       isInboundCall === "false" &&
       direction === "inbound"
+    ) {
+      disconnectedBy = "0";
+      direction = "outbound";
+    } else if (
+      hangupPartyDisposition === "send_bye" &&
+      direction === "inbound" &&
+      isInboundCall === "false"
+    ) {
+      disconnectedBy = "1";
+      direction = "outbound";
+    } else if (
+      hangupPartyDisposition === "recv_bye" &&
+      direction === "inbound" &&
+      isInboundCall === "false"
     ) {
       direction = "outbound";
       disconnectedBy = "0";
