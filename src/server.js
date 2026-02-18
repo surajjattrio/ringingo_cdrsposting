@@ -1496,7 +1496,7 @@ app.post("/cdrs", async (req, res) => {
     ) {
       // ,,,,,,,,,,,,,,,,
 
-      logger.debug("insidedeee dispostion time out data", destination_number);
+      logger.debug("insidedeee dispostion time out data", destinationNumber);
 
       // String manipulation
       let normalized = String(destinationNumber).split("_")[0];
