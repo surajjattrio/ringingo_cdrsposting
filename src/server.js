@@ -73,7 +73,7 @@ async function manageDropCallFlag(leadUuid, hangupReason, variablesValue) {
 
     if (autoHangup === "true") {
       filterCode = "AA";
-    } else if (hangupReason === "ALLOTTED_TIMEOUT") {
+    } else if (hangupReason === "ALLOTTED_TIMEOUT" || hangupReason === "USER_BUSY") {
       filterCode = "NA";
     } else if (hangupReason === "NORMAL_UNSPECIFIED") {
       filterCode = "Busy";
