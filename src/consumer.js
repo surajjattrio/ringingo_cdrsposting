@@ -55,7 +55,7 @@ class MongoDBConsumer {
     this.webhookDeliveredCount = 0;
 
     // CDR collections that should trigger webhooks
-    this.cdrCollections = ["cdrs", "inbound_cdrs", "cdrs_summary"];
+    this.cdrCollections = ["cdrs", "inbound_cdrs", "cdrs_summary", "missed_calls"];
   }
 
   /**
@@ -80,6 +80,11 @@ class MongoDBConsumer {
         config.rabbitmq.queue,
         async (msg) => {
           if (msg !== null) {
+            logger.debug("[CONSUMER] RAW MESSAGE RECEIVED", {
+              contentLength: msg.content.length,
+              fields: msg.fields,
+              properties: msg.properties
+            });
             await this.processMessage(msg, channel);
           }
         },
@@ -156,6 +161,7 @@ class MongoDBConsumer {
   async executeOperation(collection, message) {
     const { operation, args, options } = message;
 
+  try {
     switch (operation) {
       case "insertOne":
         return await collection.insertOne(convertDates(args[0]), options);
@@ -190,7 +196,15 @@ class MongoDBConsumer {
       default:
         throw new Error(`Unsupported operation: ${operation}`);
     }
+  } catch (error) {
+    logger.error("[CONSUMER] Operation execution failed", {
+      error: error.message,
+      operation,
+      collection: message.collection,
+    });
+    throw error;
   }
+}
 
   /**
    * Check if webhook should be triggered for this operation

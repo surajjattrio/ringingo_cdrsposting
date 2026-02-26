@@ -410,6 +410,89 @@ async function leadEntryManagement(destinationNumber, userUuid, tenantUuid) {
   }
 }
 
+async function resolveTenantForMissedCall(tenantUuid, leadUuid, ipMapUuid) {
+  try {
+    if (tenantUuid) {
+      return tenantUuid;
+    }
+
+    let resolvedTenantUuid = tenantUuid;
+
+    if (!resolvedTenantUuid && leadUuid) {
+      const lead = await collections.leadManagement.findOne({
+        lead_management_uuid: leadUuid,
+      });
+
+      if (lead && lead.tenant_uuid) {
+        resolvedTenantUuid = lead.tenant_uuid;
+      }
+    }
+
+    if (!resolvedTenantUuid && ipMapUuid) {
+      const ipMap = await collections.ipMap.findOne({ uuid: ipMapUuid });
+
+      if (ipMap && ipMap.tenant_uuid) {
+        resolvedTenantUuid = ipMap.tenant_uuid;
+      }
+    }
+
+    return resolvedTenantUuid || tenantUuid;
+  } catch (error) {
+    logger.error("[RESOLVE_TENANT_FOR_MISSED_CALL] Error", {
+      error: error.message,
+      stack: error.stack,
+      tenantUuid,
+      leadUuid,
+      ipMapUuid,
+    });
+    return tenantUuid;
+  }
+}
+async function resolveAgentUuidByName(username, tenantUuid, context = {}) {
+    try {
+        logger.debug('[RESOLVE_AGENT_UUID_BY_NAME] Called', {
+            username,
+            tenantUuid,
+        });
+
+        if (!username || !tenantUuid) {
+            logger.debug('[RESOLVE_AGENT_UUID_BY_NAME] Missing required parameters', {
+                username,
+                tenantUuid
+            });
+            return "";
+        }
+
+        const filter = {
+            username: username,
+            tenant_uuid: tenantUuid
+        };
+
+        logger.debug('[RESOLVE_AGENT_UUID_BY_NAME] Querying user with filter', { filter });
+
+        const user = await collections.user.findOne(filter);
+
+        if (user && user.uuid) {
+            logger.debug('[RESOLVE_AGENT_UUID_BY_NAME] User found', {
+                userUuid: user.uuid,
+                username: user.username,
+                tenantUuid: user.tenant_uuid
+            });
+            return user.uuid;
+        } else {
+            logger.debug('[RESOLVE_AGENT_UUID_BY_NAME] No user found for filter', { filter });
+            return "";
+        }
+    } catch (error) {
+        logger.error('[RESOLVE_AGENT_UUID_BY_NAME] Error', {
+            error: error.message,
+            stack: error.stack,
+            username,
+            tenantUuid
+        });
+        return "";
+    }
+}
 /**
  * Get voice broadcast disposition
  */
@@ -466,7 +549,7 @@ async function getVoicebroadcastDisposition(
         leadManagementData &&
         voicebroadcastData &&
         leadManagementData.retries_count <
-          parseInt(voicebroadcastData.max_retries)
+        parseInt(voicebroadcastData.max_retries)
       ) {
         if (
           voicebroadcastData.max_retries_disposition_uuid.includes(
@@ -875,7 +958,10 @@ app.post("/cdrs", async (req, res) => {
       variablesValue["sip_h_X-Custom-Callid"] ||
       "";
     const tenantUuid =
-      variablesValue.tenant_uuid || variablesValue["sip_h_P-tenant_uuid"] || "";
+      variablesValue.tenant_uuid ||
+      variablesValue["sip_h_X-tenant_uuid"] ||
+      variablesValue["sip_h_P-tenant_uuid"] ||
+      "";
 
     let direction = variablesValue.direction || "";
     let isInboundCall =
@@ -1336,6 +1422,7 @@ app.post("/cdrs", async (req, res) => {
     );
 
     // Inbound CDR insertion
+    const isMissedCall = callState === "missed";
     if (ipMapUuid || !userUuid || voiceBroadcast !== "") {
       incomingExtraEntryFlag = 1;
 
@@ -1389,6 +1476,81 @@ app.post("/cdrs", async (req, res) => {
       logger.debug("[CDR_PROCESSING] Inbound CDR Insert", {
         insertInboundCdrJson,
       });
+
+ if (isMissedCall && direction === "inbound") {
+    const resolvedTenantUuid = await resolveTenantForMissedCall(
+      tenantUuid,
+      leadUuid,
+      ipMapUuid,
+    );
+
+    // Detect agent-leg from call queue
+    const ccSide = variablesValue.cc_side || "";
+
+    logger.debug("[MISSED_CALL] Checking agent-leg conditions", {
+      ccSide,
+      dialedUser,
+      tenantUuid,
+      destinationNumber,
+      callerIdNumber,
+    });
+
+    // Resolve user_uuid if this is an agent leg
+    if (ccSide === "agent" && dialedUser) {
+      const agentUsername = dialedUser; // dialed_user is already clean
+
+      logger.debug("[MISSED_CALL] Attempting to resolve agent UUID", {
+        agentUsername,
+        tenantUuid,
+        ccSide,
+      });
+
+      // Call the enhanced resolveAgentUuidByName (detailed internal logging added separately)
+      const resolvedUserUuid = await resolveAgentUuidByName(agentUsername, tenantUuid);
+
+      if (resolvedUserUuid) {
+        userUuid = resolvedUserUuid;
+        logger.debug("[MISSED_CALL] Agent UUID resolved successfully", {
+          userUuid,
+          agentUsername,
+        });
+      } else {
+        logger.warn("[MISSED_CALL] Agent UUID resolution failed – no user found", {
+          agentUsername,
+          tenantUuid,
+        });
+      }
+    }
+
+    logger.debug("Missed Call ccSide", { ccSide });
+    logger.debug("Missed Call dialedUser", { dialedUser });
+
+    // Fix destinationNumber if it was overwritten by agent username
+    if (ccSide === "agent" && dialedUser === destinationNumber) {
+      destinationNumber = callerIdNumber;
+      logger.debug("[MISSED_CALL] Corrected destinationNumber to callerIdNumber", {
+        destinationNumber,
+      });
+    }
+
+    const insertMissedCdrJson = {
+      ...insertInboundCdrJson,
+      uuid: uuidv4(),
+      tenant_uuid: resolvedTenantUuid,
+      call_state: "missed",
+      user_uuid: userUuid,
+      destination_number: destinationNumber,
+    };
+
+    logger.debug("[MISSED_CALL] Final document to insert into missed_calls", {
+      insertMissedCdrJson,
+    });
+
+    await collections.missedCalls.insertOne(insertMissedCdrJson);
+    logger.debug("[CDR_PROCESSING] Missed Call CDR Insert", {
+      insertMissedCdrJson,
+    });
+  }
 
       // Webhook processing
       if (tenantUuid) {
@@ -1813,7 +1975,7 @@ app.post("/cdrs", async (req, res) => {
           insertSecondLegRecordingJson,
         });
         // Upload recording to Google Drive (synchronous)
-        if (config.googleDrive.enabled) {
+        if (config?.googleDrive?.enabled) {
           try {
             logger.info(
               "[CDR_PROCESSING] Starting Google Drive upload (Second Leg)",
@@ -2127,7 +2289,7 @@ app.post("/cdrs", async (req, res) => {
           });
 
           // Upload recording to Google Drive (synchronous)
-          if (config.googleDrive.enabled) {
+          if (config?.googleDrive?.enabled) {
             try {
               logger.info(
                 "[CDR_PROCESSING] Starting Google Drive upload (PBX Feature)",
@@ -2205,7 +2367,7 @@ app.post("/cdrs", async (req, res) => {
       }
     }
 
-// voicebroadcast cdr processing
+    // voicebroadcast cdr processing
     if (voiceBroadcast) {
       const voicebroadcastType = variablesValue["sip_h_P-voicebroadcast_type"] || "";
       let insertBroadcastString = "";
@@ -2223,7 +2385,7 @@ app.post("/cdrs", async (req, res) => {
           campaignUuid,
           billsecond
         );
-        
+
         mainLeadDisposition = String(surveyDisposition);
         insertBroadcastString = {
           createdAt,
@@ -2245,9 +2407,9 @@ app.post("/cdrs", async (req, res) => {
         // Broadcast type = IVR
         const dialedDigits = String(variablesValue["digits_dialed"] || "");
         const skipFlag = String(variablesValue["sip_h_P-skip_flag"] || "");
-        
+
         // let digits = skipFlag === "true" ? dialedDigits.slice(1) : dialedDigits;
-        
+
         // Note: The Python logic used feedbackScore/pressed_digits interchangeably here
         const pressedDigits = feedbackScore || "";
 

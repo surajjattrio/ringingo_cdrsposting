@@ -65,6 +65,7 @@ function getCollections() {
     return {
         // Main CDR collections
         cdrs: database.collection('cdrs'),
+        missedCalls: database.collection('missed_calls'),
         inboundCdrs: database.collection('inbound_cdrs'),
         recordings: database.collection('recording'),
         cdrsSummary: database.collection('cdrs_summary'),
