@@ -1923,19 +1923,19 @@ app.post("/cdrs", async (req, res) => {
         tenantUuid,
         userUuid
       });
+
+      logger.debug("[CDR_PROCESSING] Summary", {
+        message: summaryResult
+          ? "Summary exists and was updated"
+          : "Summary Record does not exist so updated",
+        result: summaryResult || summaryUpdate,
+      });
     } catch (summaryError) {
       logger.error("[CDR_PROCESSING] Failed to update CDR Summary", {
         error: summaryError.message,
         tenantUuid
       });
     }
-
-    logger.debug("[CDR_PROCESSING] Summary", {
-      message: summaryResult
-        ? "Summary exists and was updated"
-        : "Summary Record does not exist so updated",
-      result: summaryResult || summaryUpdate,
-    });
 
     // Handle receiver extension UUID (local call - second leg)
     if (receiverExtensionUuid) {
