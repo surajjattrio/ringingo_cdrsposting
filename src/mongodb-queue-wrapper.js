@@ -32,10 +32,11 @@ class MongoDBQueueWrapper {
 
       await rabbitMQ.publish(message);
 
-      logger.debug("[MONGODB_QUEUE] Operation queued", {
+      logger.info("[MONGODB_QUEUE] Operation queued for RabbitMQ", {
         messageId,
         collection: this.collectionName,
         operation,
+        data: JSON.stringify(args[0]) // Logging the "saved mongo string" (queued string)
       });
 
       return { queued: true, messageId };

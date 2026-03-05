@@ -1472,10 +1472,19 @@ app.post("/cdrs", async (req, res) => {
         ivr_feedback_score: feedbackScore,
       };
 
+      try {
       await collections.inboundCdrs.insertOne(insertInboundCdrJson);
-      logger.debug("[CDR_PROCESSING] Inbound CDR Insert", {
-        insertInboundCdrJson,
-      });
+        logger.info("[CDR_PROCESSING] Inbound CDR Queued Successfully", {
+          uuid: bridgeUuid,
+          tenantUuid
+        });
+      } catch (inboundError) {
+        logger.error("[CDR_PROCESSING] Failed to queue Inbound CDR", {
+          error: inboundError.message,
+          uuid: bridgeUuid
+        });
+        // We don't throw here to allow missed call/webhook processing to continue
+      }
 
  if (isMissedCall && direction === "inbound") {
     const resolvedTenantUuid = await resolveTenantForMissedCall(
@@ -1546,11 +1555,19 @@ app.post("/cdrs", async (req, res) => {
       insertMissedCdrJson,
     });
 
+    try {
     await collections.missedCalls.insertOne(insertMissedCdrJson);
-    logger.debug("[CDR_PROCESSING] Missed Call CDR Insert", {
-      insertMissedCdrJson,
-    });
-  }
+      logger.info("[CDR_PROCESSING] Missed Call CDR Queued Successfully", {
+        uuid: insertMissedCdrJson.uuid,
+        tenantUuid: resolvedTenantUuid
+      });
+    } catch (missedError) {
+      logger.error("[CDR_PROCESSING] Failed to queue Missed Call CDR", {
+        error: missedError.message,
+        tenantUuid: resolvedTenantUuid
+          });
+        }
+      }
 
       // Webhook processing
       if (tenantUuid) {
@@ -1644,11 +1661,18 @@ app.post("/cdrs", async (req, res) => {
         ivr_feedback_score: feedbackScore,
       };
 
-      logger.debug("[CDR_PROCESSING] First harsh CDR Insert", {
-        insertCdrJson,
-      });
-      console.log("inserting data in cdrs ........");
+      try {
       await collections.cdrs.insertOne(insertCdrJson);
+        logger.info("[CDR_PROCESSING] Regular CDR Queued Successfully", {
+          uuid: bridgeUuid,
+          tenantUuid
+        });
+      } catch (cdrError) {
+        logger.error("[CDR_PROCESSING] Failed to queue Regular CDR", {
+          error: cdrError.message,
+          uuid: bridgeUuid
+        });
+      }
     }
 
     // Handle IVR timeout and call queue timeout
@@ -1778,12 +1802,18 @@ app.post("/cdrs", async (req, res) => {
         ivr_feedback_score: feedbackScore,
       };
 
-      logger.debug(
-        "[CDR] Second harsh CDR FOR INBOUND FAIL OR DIRECT OUTBOUND Insert",
-        { insertCdrJsonIncoming }
-      );
-
+      try {
       await collections.cdrs.insertOne(insertCdrJsonIncoming);
+        logger.info("[CDR_PROCESSING] Inbound-Fail/Direct-Outbound CDR Queued Successfully", {
+          uuid: incomingBridgeUuid,
+          tenantUuid
+        });
+      } catch (secondCdrError) {
+        logger.error("[CDR_PROCESSING] Failed to queue second leg/inbound-fail CDR", {
+          error: secondCdrError.message,
+          uuid: incomingBridgeUuid
+        });
+      }
     }
 
     // Insert recording if exists
@@ -1805,8 +1835,15 @@ app.post("/cdrs", async (req, res) => {
         createdAt: createdAt,
       };
 
+      try {
       await collections.recordings.insertOne(insertRecordingJson);
-      logger.debug("[CDR] Recording Insert", { insertRecordingJson });
+        logger.info("[CDR] Recording Metadata Queued Successfully", { uuid: bridgeUuid });
+      } catch (recordingError) {
+        logger.error("[CDR] Failed to queue Recording Metadata", {
+          error: recordingError.message,
+          uuid: bridgeUuid
+        });
+      }
 
       // Upload recording to Google Drive
       try {
@@ -1875,11 +1912,23 @@ app.post("/cdrs", async (req, res) => {
       },
     };
 
+    try {
     const summaryResult = await collections.cdrsSummary.findOneAndUpdate(
       summaryFilter,
       summaryUpdate,
       { upsert: true }
     );
+      logger.info("[CDR_PROCESSING] CDR Summary Updated", {
+        date: todayDate,
+        tenantUuid,
+        userUuid
+      });
+    } catch (summaryError) {
+      logger.error("[CDR_PROCESSING] Failed to update CDR Summary", {
+        error: summaryError.message,
+        tenantUuid
+      });
+    }
 
     logger.debug("[CDR_PROCESSING] Summary", {
       message: summaryResult
@@ -1975,48 +2024,39 @@ app.post("/cdrs", async (req, res) => {
           insertSecondLegRecordingJson,
         });
         // Upload recording to Google Drive (synchronous)
-        if (config?.googleDrive?.enabled) {
-          try {
-            logger.info(
-              "[CDR_PROCESSING] Starting Google Drive upload (Second Leg)",
-              {
-                recordingPath,
-                cdrUuid: bridgeUuid + "-receiver",
-              }
-            );
+        try {
+          const driveSettings = await googleDriveSettingsManager.getSettings(
+            tenantUuid
+          );
+
+          if (driveSettings && driveSettings.enabled) {
+            logger.info("[CDR_PROCESSING] Starting Google Drive upload (Second Leg)", {
+              recordingPath,
+              cdrUuid: bridgeUuid + "-receiver",
+              tenant_uuid: tenantUuid,
+            });
 
             const cdrData = {
               uuid: bridgeUuid + "-receiver",
               user_uuid: receiverExtensionUuid,
+              tenant_uuid: tenantUuid,
               callstart: callstart,
+              createdAt: createdAt,
             };
 
-            const uploadResult = await googleDriveUploader.processRecording(
+            googleDriveUploader.processRecording(
               insertSecondLegRecordingJson,
               cdrData
-            );
-
-            if (uploadResult) {
-              logger.success(
-                "[CDR_PROCESSING] Google Drive upload completed (Second Leg)",
-                {
-                  fileId: uploadResult.fileId,
-                  publicUrl: uploadResult.publicUrl,
-                }
-              );
-            } else {
-              logger.warn(
-                "[CDR_PROCESSING] Google Drive upload failed (Second Leg)"
-              );
-            }
-          } catch (uploadError) {
-            logger.error(
-              "[CDR_PROCESSING] Google Drive upload error (Second Leg)",
-              {
-                error: uploadError.message,
-              }
-            );
+            ).catch(err => {
+              logger.error("[CDR_PROCESSING] Google Drive upload background error (Second Leg)", {
+                error: err.message
+              });
+            });
           }
+        } catch (uploadError) {
+          logger.error("[CDR_PROCESSING] Google Drive settings/upload setup error (Second Leg)", {
+            error: uploadError.message,
+          });
         }
       }
 
@@ -2260,10 +2300,18 @@ app.post("/cdrs", async (req, res) => {
           ivr_feedback_score: feedbackScore,
         };
 
+        try {
         await collections.cdrs.insertOne(insertCdrJson);
-        logger.debug("[CDR] Four harsh Extra PBX CDR Insert", {
-          insertCdrJson,
-        });
+          logger.info("[CDR_PROCESSING] Regular CDR Queued Successfully", {
+            uuid: bridgeUuid,
+            tenantUuid
+          });
+        } catch (cdrError) {
+          logger.error("[CDR_PROCESSING] Failed to queue Regular CDR", {
+            error: cdrError.message,
+            uuid: bridgeUuid
+          });
+        }
 
         if (billsecond && billsecond !== 0 && recordingPath) {
           const insertRecordingJson = {
@@ -2516,13 +2564,20 @@ app.post("/cdrs", async (req, res) => {
       }
 
       if (insertBroadcastString !== "") {
+        try {
         await collections.voiceBroadcastDetails.insertOne(insertBroadcastString);
-        logger.debug("[CDR] Voicebroadcast details inserted");
+          logger.info("[CDR] Voicebroadcast details queued", { uuid: broadcastUuid });
 
         await collections.leadManagement.updateOne(
           { lead_management_uuid: leadUuid },
           { $set: { lead_status: mainLeadDisposition } }
         );
+        } catch (vbError) {
+          logger.error("[CDR] Voicebroadcast processing failed", {
+            error: vbError.message,
+            uuid: broadcastUuid
+          });
+        }
       }
     }
     // voicebroadcast cdr processing end

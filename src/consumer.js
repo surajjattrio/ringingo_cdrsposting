@@ -160,6 +160,14 @@ class MongoDBConsumer {
    */
   async executeOperation(collection, message) {
     const { operation, args, options } = message;
+    const convertedArgs = args.map((arg) => convertDates(arg));
+
+    logger.info("[CONSUMER] Executing MongoDB Operation", {
+      messageId: message.messageId,
+      collection: message.collection,
+      operation,
+      document: JSON.stringify(convertedArgs[0]), // Logging the "saved mongo string"
+    });
 
   try {
     switch (operation) {
