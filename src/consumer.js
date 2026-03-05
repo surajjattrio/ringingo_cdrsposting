@@ -7,7 +7,7 @@
 import rabbitMQ from "./rabbitmq.js";
 import config from "./config.js";
 import logger from "./logger.js";
-import { getDatabase } from "./database.js";
+import { getDatabase, reconnectMongoDB, checkConnection } from "./database.js";
 import webhookManager from "./webhook/webhook-manager.js";
 
 /**
@@ -125,6 +125,12 @@ class MongoDBConsumer {
         operation: message.operation,
         retryCount: message.retryCount,
       });
+
+      // Check MongoDB connection before attempting
+      if (!(await checkConnection())) {
+        logger.warn("[CONSUMER] MongoDB connection lost, attempting reconnect before processing...");
+        await reconnectMongoDB();
+      }
 
       // Get database and collection
       const db = getDatabase();
@@ -308,6 +314,18 @@ class MongoDBConsumer {
       error: error.message,
       stack: error.stack,
     });
+
+    // Check if error is network related and trigger reconnect
+    const isNetworkError = error.name === 'MongoNetworkError' ||
+      error.name === 'MongoServerSelectionError' ||
+      error.name === 'MongoTopologyClosedError' ||
+      error.message.includes('topology') ||
+      error.message.includes('ECONNREFUSED');
+
+    if (isNetworkError) {
+      logger.warn("[CONSUMER] Detected MongoDB network error during failure handling, triggering reconnect...");
+      await reconnectMongoDB();
+    }
 
     try {
       // Get retry count

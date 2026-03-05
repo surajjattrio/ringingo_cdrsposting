@@ -10,6 +10,7 @@ import logger from './logger.js';
 let client = null;
 let db = null;
 let isConnected = false;
+let isReconnecting = false;
 
 /**
  * Initialize MongoDB connection
@@ -29,8 +30,8 @@ async function connectMongoDB() {
         await client.connect();
         
         // Verify connection
-        await client.db('admin').command({ ping: 1 });
-        
+        await client.db(config.mongodb.database).command({ ping: 1 });
+
         db = client.db(config.mongodb.database);
         isConnected = true;
 
@@ -136,10 +137,66 @@ function isMongoDBConnected() {
     return isConnected;
 }
 
+/**
+ * Reconnect to MongoDB with exponential backoff
+ */
+async function reconnectMongoDB() {
+    if (isReconnecting) return false;
+    isReconnecting = true;
+    isConnected = false;
+
+    logger.warn('[MONGODB] Connection lost. Attempting to reconnect...');
+
+    try {
+        if (client) {
+            await client.close(true).catch(() => { });
+            client = null;
+        }
+    } catch (e) { }
+
+    let retries = 0;
+    while (retries < 10) {
+        try {
+            logger.info(`[MONGODB] Reconnection attempt ${retries + 1}/10...`);
+            client = new MongoClient(config.mongodb.url, config.mongodb.options);
+            await client.connect();
+            await client.db(config.mongodb.database).command({ ping: 1 });
+            db = client.db(config.mongodb.database);
+            isConnected = true;
+            isReconnecting = false;
+            logger.success('[MONGODB] Reconnected successfully');
+            return true;
+        } catch (error) {
+            retries++;
+            logger.error(`[MONGODB] Reconnection attempt ${retries} failed`, { error: error.message });
+            await new Promise(res => setTimeout(res, 5000));
+        }
+    }
+
+    logger.error('[MONGODB] Max reconnection attempts reached. Process restart recommended.');
+    isReconnecting = false;
+    return false;
+}
+
+/**
+ * Check if MongoDB connection is active
+ */
+async function checkConnection() {
+    if (!client || !isConnected) return false;
+    try {
+        await client.db(config.mongodb.database).command({ ping: 1 });
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
 export {
     connectMongoDB,
     getDatabase,
     getCollections,
     closeMongoDB,
-    isMongoDBConnected
+    isMongoDBConnected,
+    reconnectMongoDB,
+    checkConnection
 };

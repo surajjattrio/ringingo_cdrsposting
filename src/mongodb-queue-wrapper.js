@@ -7,11 +7,24 @@
 import { v4 as uuidv4 } from "uuid";
 import rabbitMQ from "./rabbitmq.js";
 import logger from "./logger.js";
+import { getDatabase } from "./database.js";
 
 class MongoDBQueueWrapper {
   constructor(collection, collectionName) {
-    this.collection = collection;
     this.collectionName = collectionName;
+  }
+
+  /**
+   * Dynamically fetch the collection on every query.
+   * THIS IS COMPULSORY for auto-reconnection!
+   * If we store `this.collection` statically in the constructor, 
+   * this wrapper will permanently hold onto a dead connection object 
+   * if the database ever restarts, requiring a PM2 restart to fix.
+   * Fetching it dynamically via `getDatabase()` guarantees we always 
+   * get the fresh, working database object after a reconnection.
+   */
+  get _collection() {
+    return getDatabase().collection(this.collectionName);
   }
 
   /**
@@ -101,36 +114,36 @@ class MongoDBQueueWrapper {
    * Read operations - direct passthrough (no queuing needed)
    */
   async findOne(filter, options = {}) {
-    return this.collection.findOne(filter, options);
+    return this._collection.findOne(filter, options);
   }
 
   find(filter, options = {}) {
     // Return the cursor directly so toArray(), forEach(), etc. work
-    return this.collection.find(filter, options);
+    return this._collection.find(filter, options);
   }
 
   async countDocuments(filter, options = {}) {
-    return this.collection.countDocuments(filter, options);
+    return this._collection.countDocuments(filter, options);
   }
 
   async estimatedDocumentCount(options = {}) {
-    return this.collection.estimatedDocumentCount(options);
+    return this._collection.estimatedDocumentCount(options);
   }
 
   async distinct(key, filter, options = {}) {
-    return this.collection.distinct(key, filter, options);
+    return this._collection.distinct(key, filter, options);
   }
 
   aggregate(pipeline, options = {}) {
     // Return the aggregation cursor directly
-    return this.collection.aggregate(pipeline, options);
+    return this._collection.aggregate(pipeline, options);
   }
 
   /**
    * Get the original collection (for advanced operations)
    */
   getOriginalCollection() {
-    return this.collection;
+    return this._collection;
   }
 }
 

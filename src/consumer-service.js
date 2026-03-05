@@ -6,7 +6,7 @@
  */
 
 import logger from "./logger.js";
-import { connectMongoDB, closeMongoDB } from "./database.js";
+import { connectMongoDB, closeMongoDB, checkConnection, reconnectMongoDB } from "./database.js";
 import rabbitMQ from "./rabbitmq.js";
 import consumer from "./consumer.js";
 import webhookManager from "./webhook/webhook-manager.js";
@@ -49,6 +49,14 @@ async function startConsumerService() {
       await webhookManager.reloadWebhooks();
     }, 1800000); // 30 min
 
+    // MongoDB connection health check (every 60 seconds)
+    const mongoHealthCheckInterval = setInterval(async () => {
+      if (!(await checkConnection())) {
+        logger.warn('[CONSUMER_SERVICE] Background health check detected dead MongoDB connection. Triggering reconnect...');
+        await reconnectMongoDB();
+      }
+    }, 60000); // 60 sec
+
     // Graceful shutdown
     const gracefulShutdown = async (signal) => {
       logger.info("==============================");
@@ -59,6 +67,7 @@ async function startConsumerService() {
 
       // Clear intervals
       clearInterval(webhookReloadInterval);
+      clearInterval(mongoHealthCheckInterval);
 
       await consumer.stop();
       logger.info("Consumer stopped");
