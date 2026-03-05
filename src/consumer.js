@@ -130,6 +130,14 @@ class MongoDBConsumer {
       const db = getDatabase();
       const collection = db.collection(message.collection);
 
+      logger.info("[CONSUMER] Storing data in MongoDB", {
+        database: config.mongodb.database,
+        url: config.mongodb.url.replace(/\/\/([^:]+):([^@]+)@/, '//***:***@'),
+        collection: message.collection,
+        operation: message.operation,
+        messageId: message.messageId,
+      });
+
       // Execute MongoDB operation
       operationResult = await this.executeOperation(collection, message);
 

@@ -34,7 +34,7 @@ async function connectMongoDB() {
         db = client.db(config.mongodb.database);
         isConnected = true;
 
-        logger.success('[MONGODB] Connection successful', {
+        logger.info('[MONGODB] Connection successful', {
             database: config.mongodb.database,
             url: config.mongodb.url.replace(/\/\/([^:]+):([^@]+)@/, '//***:***@')
         });
