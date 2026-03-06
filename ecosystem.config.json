@@ -6,7 +6,8 @@
       "instances": 1,
       "exec_mode": "fork",
       "watch": false,
-      "max_memory_restart": "2G",
+      "max_memory_restart": "6G",
+      "kill_timeout": 10000,
       "env": {
         "NODE_ENV": "production"
       },
@@ -24,7 +25,8 @@
       "instances": 1,
       "exec_mode": "fork",
       "watch": false,
-      "max_memory_restart": "2G",
+      "max_memory_restart": "6G",
+      "kill_timeout": 10000,
       "env": {
         "NODE_ENV": "production"
       },
