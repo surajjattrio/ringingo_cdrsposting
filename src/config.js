@@ -14,6 +14,7 @@ const requiredEnvVars = [
     'ESL_PASSWORD',
     'MONGO_URL',
     'APP_PORT',
+    'INSTANCE_ID',
     'RABBITMQ_HOST',
     'RABBITMQ_PORT',
     'RABBITMQ_USER',
@@ -86,9 +87,9 @@ const config = {
         port: parseInt(process.env.RABBITMQ_PORT, 10) || 5672,
         user: process.env.RABBITMQ_USER,
         password: process.env.RABBITMQ_PASSWORD,
-        queue: process.env.RABBITMQ_QUEUE || 'freeswitch_cdr_operations',
-        deadLetterQueue: process.env.RABBITMQ_DLQ || 'freeswitch_cdr_operations_dlq',
-        deadLetterExchange: process.env.RABBITMQ_DLX || 'freeswitch_cdr_operations_dlx',
+        queue: `freeswitch_cdr_operations_${process.env.INSTANCE_ID}`,
+        deadLetterQueue: `freeswitch_cdr_operations_dlq_${process.env.INSTANCE_ID}`,
+        deadLetterExchange: `freeswitch_cdr_operations_dlx_${process.env.INSTANCE_ID}`,
         maxRetries: parseInt(process.env.RABBITMQ_MAX_RETRIES, 10) || 3,
         retryDelay: parseInt(process.env.RABBITMQ_RETRY_DELAY, 10) || 5000, // 5 seconds
         maxRetryDelay: parseInt(process.env.RABBITMQ_MAX_RETRY_DELAY, 10) || 60000, // 60 seconds
