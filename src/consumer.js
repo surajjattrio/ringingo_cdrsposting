@@ -55,7 +55,7 @@ class MongoDBConsumer {
     this.webhookDeliveredCount = 0;
 
     // CDR collections that should trigger webhooks
-    this.cdrCollections = ["cdrs", "inbound_cdrs", "cdrs_summary", "missed_calls"];
+    this.cdrCollections = ["cdrs", "inbound_cdrs", "cdrs_summary", "missed_calls", "drop_calls"];
   }
 
   /**

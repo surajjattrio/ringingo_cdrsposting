@@ -1555,14 +1555,22 @@ app.post("/cdrs", async (req, res) => {
       insertMissedCdrJson,
     });
 
-    try {
+        try {
+          if (disposition === "CALLQUEUE_TIMEOUT") {
+            await collections.drop_calls.insertOne(insertMissedCdrJson);
+            logger.info("[CDR_PROCESSING] Missed Call (Queue Timeout) CDR Queued to Drop_calls Successfully", {
+              uuid: insertMissedCdrJson.uuid,
+              tenantUuid: resolvedTenantUuid
+            });
+          } else {
     await collections.missedCalls.insertOne(insertMissedCdrJson);
       logger.info("[CDR_PROCESSING] Missed Call CDR Queued Successfully", {
         uuid: insertMissedCdrJson.uuid,
         tenantUuid: resolvedTenantUuid
       });
+          }
     } catch (missedError) {
-      logger.error("[CDR_PROCESSING] Failed to queue Missed Call CDR", {
+      logger.error("[CDR_PROCESSING] Failed to queue Missed/Drop Call CDR", {
         error: missedError.message,
         tenantUuid: resolvedTenantUuid
           });
