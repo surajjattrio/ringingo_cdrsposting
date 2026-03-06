@@ -137,8 +137,22 @@ class RabbitMQManager {
         { durable: true }
       );
 
+      // Assert main exchange
+      await this.channel.assertExchange(
+        config.rabbitmq.mainExchange,
+        "direct",
+        { durable: true }
+      );
+
       // Assert main queue
       await this.channel.assertQueue(config.rabbitmq.queue, mainQueueOptions);
+
+      // Bind main queue to exchange
+      await this.channel.bindQueue(
+        config.rabbitmq.queue,
+        config.rabbitmq.mainExchange,
+        config.rabbitmq.queue
+      );
 
       // Assert dead letter queue
       await this.channel.assertQueue(
@@ -155,6 +169,7 @@ class RabbitMQManager {
 
       logger.success("[RABBITMQ] Queues and exchanges configured", {
         mainQueue: config.rabbitmq.queue,
+        mainExchange: config.rabbitmq.mainExchange,
         deadLetterQueue: config.rabbitmq.deadLetterQueue,
         deadLetterExchange: config.rabbitmq.deadLetterExchange,
       });
@@ -209,8 +224,9 @@ class RabbitMQManager {
         ...options,
       };
 
-      const result = this.channel.sendToQueue(
-        config.rabbitmq.queue,
+      const result = this.channel.publish(
+        config.rabbitmq.mainExchange,
+        config.rabbitmq.queue, // Use queue name as routing key
         messageBuffer,
         publishOptions
       );

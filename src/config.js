@@ -88,6 +88,7 @@ const config = {
         user: process.env.RABBITMQ_USER,
         password: process.env.RABBITMQ_PASSWORD,
         queue: `freeswitch_cdr_operations_${process.env.INSTANCE_ID}`,
+        mainExchange: `freeswitch_cdr_operations_ex_${process.env.INSTANCE_ID}`,
         deadLetterQueue: `freeswitch_cdr_operations_dlq_${process.env.INSTANCE_ID}`,
         deadLetterExchange: `freeswitch_cdr_operations_dlx_${process.env.INSTANCE_ID}`,
         maxRetries: parseInt(process.env.RABBITMQ_MAX_RETRIES, 10) || 3,
