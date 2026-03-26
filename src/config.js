@@ -96,6 +96,11 @@ const config = {
         maxRetryDelay: parseInt(process.env.RABBITMQ_MAX_RETRY_DELAY, 10) || 60000, // 60 seconds
         messageTtl: parseInt(process.env.RABBITMQ_MESSAGE_TTL, 10) || 86400000, // 24 hours
     },
+
+    webhooks: {
+        queue: `freeswitch_webhook_delivery_${process.env.INSTANCE_ID}`,
+        delay: 60000, // Default 1 minute
+    }
 };
 
 // Validate MongoDB URL format

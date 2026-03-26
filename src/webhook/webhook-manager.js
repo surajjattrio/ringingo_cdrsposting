@@ -6,12 +6,12 @@
  */
 
 import axios from "axios";
+import https from "https";
 import logger from "../logger.js";
 import { getDatabase } from "../database.js";
 
 class WebhookManager {
   constructor() {
-    this.activeWebhooks = new Map();
     this.deliveryStats = {
       total: 0,
       success: 0,
@@ -20,126 +20,77 @@ class WebhookManager {
   }
 
   /**
-   * Initialize webhooks from database
+   * Deliver CDR to all active webhooks for a tenant
+   * @param {Object} cdr - CDR data to send
+   * @param {string} tenantUuid - Tenant filter
    */
-  async initialize() {
+  async deliverCDR(cdr, tenantUuid = null) {
     try {
-      logger.info("[WEBHOOK] Initializing webhook manager...");
-
       const db = getDatabase();
       const webhooksCollection = db.collection("web_hook");
 
-      // Fetch active webhooks
-      const webhooks = await webhooksCollection
-        .find({
-          is_active: true,
-          webhook_type: "cdr", // Filter for CDR webhooks only
-        })
-        .toArray();
+      // Build filter
+      const filter = {
+        is_active: true,
+        webhook_type: "cdr",
+      };
 
-      // Store active webhooks in memory
-      webhooks.forEach((webhook) => {
-        this.activeWebhooks.set(webhook._id.toString(), {
+      if (tenantUuid) {
+        filter.tenant_uuid = tenantUuid;
+      }
+
+      // Fetch matching webhooks directly from DB
+      const webhooks = await webhooksCollection.find(filter).toArray();
+
+      if (webhooks.length === 0) {
+        logger.debug("[WEBHOOK] No matching active webhooks found", { tenantUuid });
+        return;
+      }
+
+      logger.debug("[WEBHOOK] Delivering CDR to webhooks", {
+        cdrUuid: cdr.uuid,
+        webhookCount: webhooks.length,
+      });
+
+      // Prepare webhook configs and deliver in parallel
+      const deliveryPromises = webhooks.map((webhook) => {
+        const config = {
           uuid: webhook.uuid,
-          url: webhook.webhook_url,
+          url: (webhook.webhook_url || "").trim(),
           method: webhook.method || "POST",
           headers: webhook.headers || {},
           timeout: webhook.timeout || 30000,
           retries: webhook.max_retries || 3,
           retryDelay: webhook.retry_delay || 2000,
-          tenantId: webhook.tenant_id,
           tenantUuid: webhook.tenant_uuid,
           name: webhook.name || "Unnamed Webhook",
-        });
+          bearerToken: webhook.bearer_token || null,
+        };
+        return this.deliverToWebhook(config, cdr);
       });
 
-      logger.success(
-        `[WEBHOOK] Loaded ${this.activeWebhooks.size} active webhooks`
-      );
+      await Promise.allSettled(deliveryPromises);
     } catch (error) {
-      logger.error("[WEBHOOK] Failed to initialize webhooks", {
+      logger.error("[WEBHOOK] Delivery process failed", {
         error: error.message,
-        stack: error.stack,
-      });
-      throw error;
-    }
-  }
-
-  /**
-   * Reload webhooks from database (call this periodically or on webhook changes)
-   */
-  async reloadWebhooks() {
-    try {
-      logger.info("[WEBHOOK] Reloading webhooks...");
-      this.activeWebhooks.clear();
-      await this.initialize();
-    } catch (error) {
-      logger.error("[WEBHOOK] Failed to reload webhooks", {
-        error: error.message,
+        tenantUuid,
       });
     }
   }
 
   /**
-   * Deliver CDR to all active webhooks
-   * @param {Object} cdr - CDR data to send
-   * @param {string} tenantId - Optional tenant filter
+   * Process a webhook delivery task from the queue
+   * @param {Object} task - { cdrUuid, collectionName, tenantUuid }
    */
-  async deliverCDR(cdr, tenantUuid = null) {
-    if (this.activeWebhooks.size === 0) {
-      logger.debug("[WEBHOOK] No active webhooks configured");
-      return;
-    }
+  async processWebhookTask(task) {
+    const { cdrUuid, collectionName, tenantUuid } = task;
 
-    const webhooksToDeliver = Array.from(this.activeWebhooks.values()).filter(
-      (webhook) => !tenantUuid || webhook.tenantUuid === tenantUuid
-    );
-
-    if (webhooksToDeliver.length === 0) {
-      logger.debug("[WEBHOOK] No webhooks match tenant filter", { tenantUuid });
-      return;
-    }
-
-    logger.debug("[WEBHOOK] Delivering CDR to webhooks", {
-      cdrUuid: cdr.cdrUuid,
-      webhookCount: webhooksToDeliver.length,
-    });
-
-    // Deliver to all webhooks in parallel
-    const deliveryPromises = webhooksToDeliver.map((webhook) =>
-      this.deliverToWebhook(webhook, cdr)
-    );
-
-    await Promise.allSettled(deliveryPromises);
-  }
-
-  /**
-   * Schedule delayed webhook delivery with fresh data fetch
-   * @param {string} cdrUuid - CDR UUID to fetch
-   * @param {string} collectionName - Collection to fetch from
-   * @param {string} tenantUuid - Optional tenant filter
-   * @param {number} delayMs - Delay in milliseconds (default 1 minutes)
-   */
-  async scheduleDelayedDelivery(cdrUuid, collectionName, tenantUuid = null, delayMs = 300000) {
     try {
-      logger.debug('⏰[WEBHOOK] Scheduling delayed delivery', {
+      logger.info('[WEBHOOK] Processing task from queue', {
         cdrUuid,
         collectionName,
         tenantUuid,
-        delayMinutes: delayMs / 60000,
       });
-
-      console.log(`⏰ [WEBHOOK] Scheduled delivery for CDR ${cdrUuid} in ${delayMs / 60000} minutes`);
-
-      // Wait for the specified delay
-      await new Promise(resolve => setTimeout(resolve, delayMs));
-
-      logger.info('[WEBHOOK] Fetching fresh CDR data for delivery', {
-        cdrUuid,
-        collectionName,
-      });
-
-      console.log(`🔄 [WEBHOOK] Fetching fresh data for CDR ${cdrUuid}`);
 
       // Fetch fresh CDR data from database
       const db = getDatabase();
@@ -148,32 +99,24 @@ class WebhookManager {
       const freshCdr = await collection.findOne({ uuid: cdrUuid });
 
       if (!freshCdr) {
-        logger.warn('[WEBHOOK] CDR not found, skipping delivery', {
+        logger.warn('[WEBHOOK] CDR not found in database, skipping delivery', {
           cdrUuid,
           collectionName,
         });
-        console.log(`⚠️  [WEBHOOK] CDR ${cdrUuid} not found in database`);
         return;
       }
-
-      logger.info('[WEBHOOK] Fresh CDR data fetched, delivering to webhooks', {
-        cdrUuid,
-        collectionName,
-      });
-
-      console.log(`📤 [WEBHOOK] Delivering fresh CDR ${cdrUuid} to webhooks`);
 
       // Deliver fresh CDR to webhooks
       await this.deliverCDR(freshCdr, tenantUuid);
 
     } catch (error) {
-      logger.error('[WEBHOOK] Delayed delivery failed', {
+      logger.error('[WEBHOOK] Queue task processing failed', {
         error: error.message,
         stack: error.stack,
         cdrUuid,
         collectionName,
       });
-      console.error(`❌ [WEBHOOK] Failed to deliver CDR ${cdrUuid}: ${error.message}`);
+      throw error; // Rethrow to allow RabbitMQ retry
     }
   }
 
@@ -192,21 +135,45 @@ class WebhookManager {
         logger.debug("[WEBHOOK] Attempting delivery", {
           webhookName: webhook.name,
           webhookUuid: webhook.uuid,
+          webhookUrl: webhook.url,
           attempt,
           maxRetries: webhook.retries,
           cdrUuid: cdr.uuid,
         });
-        console.log(webhook, "webhook");
+
+        // Prepare headers
+        const headers = {
+          "Content-Type": "application/json",
+          ...webhook.headers,
+        };
+
+        // Add Bearer Token if present
+        if (webhook.bearerToken) {
+          headers["Authorization"] = `Bearer ${webhook.bearerToken}`;
+        }
+
+        // Debug log for headers (masking sensitive data)
+        const loggedHeaders = { ...headers };
+        if (loggedHeaders["Authorization"]) {
+          loggedHeaders["Authorization"] = "Bearer [MASKED]";
+        }
+        
+        logger.debug("[WEBHOOK] Request details", {
+          url: webhook.url,
+          method: webhook.method,
+          headers: loggedHeaders,
+          data: cdr, // Add full CDR payload for inspection
+        });
+
         const response = await axios({
           method: webhook.method,
           url: webhook.url,
           data: cdr,
-          headers: {
-            "Content-Type": "application/json",
-            "User-Agent": "CDR-Webhook-Service/1.0",
-            ...webhook.headers,
-          },
+          headers: headers,
           timeout: webhook.timeout,
+          httpsAgent: new https.Agent({
+            rejectUnauthorized: false,
+          }),
           validateStatus: (status) => {
             return status === 200;
           },
@@ -217,6 +184,7 @@ class WebhookManager {
         logger.info("[WEBHOOK] Delivery successful", {
           webhookName: webhook.name,
           webhookUuid: webhook.uuid,
+          webhookUrl: webhook.url,
           cdrUuid: cdr.uuid,
           statusCode: response.status,
           durationMs: duration,
@@ -240,6 +208,9 @@ class WebhookManager {
         return { success: true, webhook: webhook.name };
       } catch (error) {
         lastError = error;
+        
+        // Log basic error message safely without circular references
+        logger.warn(`[WEBHOOK] Delivery attempt ${attempt} failed: ${error.message}`);
 
          lastErrorDetails  = {
           message: error.message,
@@ -247,6 +218,7 @@ class WebhookManager {
           statusCode: error.response?.status,
           statusText: error.response?.statusText,
           responseData: error.response?.data,
+          headers: error.response?.headers,
           isTimeout: error.code === "ECONNABORTED",
           isNetworkError:
             error.code === "ENOTFOUND" || error.code === "ECONNREFUSED",
@@ -341,22 +313,9 @@ class WebhookManager {
     return {
       ...this.deliveryStats,
       successRate: `${successRate}%`,
-      activeWebhooks: this.activeWebhooks.size,
     };
   }
 
-  /**
-   * Get list of active webhooks
-   */
-  getActiveWebhooks() {
-    return Array.from(this.activeWebhooks.values()).map((webhook) => ({
-      uuid: webhook.uuid,
-      name: webhook.name,
-      url: webhook.url,
-      method: webhook.method,
-      tenantUuid: webhook.tenantUuid,
-    }));
-  }
 }
 
 // Export singleton instance

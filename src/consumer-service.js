@@ -9,7 +9,7 @@ import logger from "./logger.js";
 import { connectMongoDB, closeMongoDB, checkConnection, reconnectMongoDB } from "./database.js";
 import rabbitMQ from "./rabbitmq.js";
 import consumer from "./consumer.js";
-import webhookManager from "./webhook/webhook-manager.js";
+import webhookConsumer from "./webhook/webhook-consumer.js";
 
 /**
  * Start consumer service with webhook support
@@ -28,26 +28,20 @@ async function startConsumerService() {
     await rabbitMQ.connect();
     logger.success("✅ RabbitMQ connection established");
 
-    // Initialize webhook manager
-    await webhookManager.initialize();
-    logger.success("✅ Webhook manager initialized");
 
     // Start consuming messages
     await consumer.start();
-    logger.success("✅ Consumer started successfully");
+    logger.success("✅ Main consumer started successfully");
+
+    // Start consuming messages (Webhook Delivery Tasks)
+    await webhookConsumer.start();
+    logger.success("✅ Webhook consumer started successfully");
 
     logger.info("==============================");
     logger.info("[CONSUMER_SERVICE] Consumer Service Running");
     logger.info("  - Processing MongoDB operations");
     logger.info("  - Delivering CDRs to webhooks");
-    logger.info(`  - Active webhooks: ${webhookManager.getActiveWebhooks().length}`);
     logger.info("==============================\n");
-
-    // Reload webhooks periodically (every 30 minutes)
-    const webhookReloadInterval = setInterval(async () => {
-      logger.info('[CONSUMER_SERVICE] Reloading webhooks...');
-      await webhookManager.reloadWebhooks();
-    }, 1800000); // 30 min
 
     // MongoDB connection health check (every 60 seconds)
     const mongoHealthCheckInterval = setInterval(async () => {
@@ -66,11 +60,11 @@ async function startConsumerService() {
       logger.info("==============================");
 
       // Clear intervals
-      clearInterval(webhookReloadInterval);
       clearInterval(mongoHealthCheckInterval);
 
       await consumer.stop();
-      logger.info("Consumer stopped");
+      await webhookConsumer.stop();
+      logger.info("Consumers stopped");
 
       await rabbitMQ.close();
       logger.info("RabbitMQ connection closed");
@@ -79,7 +73,8 @@ async function startConsumerService() {
       logger.info("MongoDB connection closed");
 
       const stats = consumer.getStats();
-      logger.info("[CONSUMER_SERVICE] Final Stats", stats);
+      const webhookStats = webhookConsumer.getStats();
+      logger.info("[CONSUMER_SERVICE] Final Stats", { ...stats, webhookStats });
 
       logger.info("==============================");
       logger.info("[CONSUMER_SERVICE] Shutdown complete");

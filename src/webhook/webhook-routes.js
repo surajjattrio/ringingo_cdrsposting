@@ -115,6 +115,7 @@ router.post('/webhooks', async (req, res) => {
             is_active = true,
             tenant_uuid,
             tenant_id, // Fallback support
+            bearer_token = null,
         } = req.body;
         
         // Validation
@@ -153,14 +154,12 @@ router.post('/webhooks', async (req, res) => {
             retry_delay,
             is_active,
             tenant_uuid: tenant_uuid || tenant_id || null, // Prefer tenant_uuid
+            bearer_token,
             created_at: new Date(),
             updated_at: new Date(),
         };
         
         const result = await webhooksCollection.insertOne(newWebhook);
-        
-        // Reload webhooks in memory
-        await webhookManager.reloadWebhooks();
         
         logger.info('[WEBHOOK_API] Webhook created', {
             webhookUuid,
@@ -209,6 +208,7 @@ router.put('/webhooks/:id', async (req, res) => {
             is_active,
             tenant_uuid,
             tenant_id, // Fallback support
+            bearer_token,
         } = req.body;
         
         const updates = {};
@@ -234,6 +234,7 @@ router.put('/webhooks/:id', async (req, res) => {
         if (is_active !== undefined) updates.is_active = is_active;
         if (tenant_uuid !== undefined) updates.tenant_uuid = tenant_uuid;
         else if (tenant_id !== undefined) updates.tenant_uuid = tenant_id;
+        if (bearer_token !== undefined) updates.bearer_token = bearer_token;
         
         updates.updated_at = new Date();
         
@@ -259,9 +260,6 @@ router.put('/webhooks/:id', async (req, res) => {
                 error: 'Webhook not found',
             });
         }
-        
-        // Reload webhooks in memory
-        await webhookManager.reloadWebhooks();
         
         logger.info('[WEBHOOK_API] Webhook updated', {
             webhookId: req.params.id,
@@ -313,9 +311,6 @@ router.delete('/webhooks/:id', async (req, res) => {
             });
         }
         
-        // Reload webhooks in memory
-        await webhookManager.reloadWebhooks();
-        
         logger.info('[WEBHOOK_API] Webhook deleted', {
             webhookId: req.params.id,
         });
@@ -346,13 +341,11 @@ router.delete('/webhooks/:id', async (req, res) => {
 router.get('/webhooks-stats', async (req, res) => {
     try {
         const stats = webhookManager.getStats();
-        const activeWebhooks = webhookManager.getActiveWebhooks();
         
         res.json({
             success: true,
             data: {
                 ...stats,
-                webhooks: activeWebhooks,
             },
         });
         
@@ -414,28 +407,93 @@ router.get('/webhook-logs', async (req, res) => {
 });
 
 /**
- * POST /api/webhooks-reload
- * Reload webhooks from database
+ * POST /api/webhooks/:id/test
+ * Manually test a webhook with a sample CDR
  */
-router.post('/webhooks-reload', async (req, res) => {
+router.post('/webhooks/:id/test', async (req, res) => {
     try {
-        await webhookManager.reloadWebhooks();
+        const db = getDatabase();
+        const webhooksCollection = db.collection('web_hook');
         
-        logger.info('[WEBHOOK_API] Webhooks reloaded');
+        let queryId = null;
+        try {
+            queryId = new ObjectId(req.params.id);
+        } catch (e) {}
         
-        res.json({
-            success: true,
-            message: 'Webhooks reloaded successfully',
-            activeWebhooks: webhookManager.getActiveWebhooks().length,
+        let webhook = await webhooksCollection.findOne({ 
+            $or: [{ uuid: req.params.id }, { _id: queryId }] 
         });
         
+        if (!webhook) {
+            return res.status(404).json({
+                success: false,
+                error: 'Webhook not found',
+            });
+        }
+        
+        // Sample CDR data or custom data from request body
+        const sampleCdr = req.body.cdr || {
+            uuid: "test-uuid-" + Date.now(),
+            caller_id_number: "1234567890",
+            destination_number: "9876543210",
+            duration: "60",
+            tenant_uuid: webhook.tenant_uuid || "test-tenant-uuid",
+            is_test: true,
+            companyId: "TEST_COMP_001" // Include common required fields
+        };
+        
+        const config = {
+          uuid: webhook.uuid,
+          url: webhook.webhook_url,
+          method: webhook.method || "POST",
+          headers: webhook.headers || {},
+          timeout: webhook.timeout || 30000,
+          retries: 1, // Only try once for manual tests
+          retryDelay: 1000,
+          tenantUuid: webhook.tenant_uuid,
+          name: webhook.name || "Test Webhook",
+          bearerToken: webhook.bearer_token || null,
+        };
+        
+        logger.info('[WEBHOOK_API] Triggering manual test delivery', {
+            webhookUuid: webhook.uuid,
+            url: webhook.webhook_url
+        });
+        
+        // Use a try-catch for the specific delivery to capture the error for the response
+        try {
+            await webhookManager.deliverToWebhook(config, sampleCdr);
+            res.json({
+                success: true,
+                message: 'Test delivery successful.',
+                targetUrl: webhook.webhook_url,
+                cdr: sampleCdr
+            });
+        } catch (deliveryError) {
+             logger.warn('[WEBHOOK_API] Manual test delivery failed', {
+                webhookUuid: webhook.uuid,
+                error: deliveryError.message
+             });
+             
+             res.status(200).json({ // Return 200 with success: false
+                success: false,
+                message: 'Test delivery failed. Server responded with an error.',
+                error: deliveryError.message,
+                details: {
+                    statusCode: deliveryError.response?.status,
+                    statusText: deliveryError.response?.statusText,
+                    responseData: deliveryError.response?.data
+                }
+            });
+        }
+        
     } catch (error) {
-        logger.error('[WEBHOOK_API] Failed to reload webhooks', {
+        logger.error('[WEBHOOK_API] Manual test failed', {
             error: error.message,
         });
         res.status(500).json({
             success: false,
-            error: 'Failed to reload webhooks',
+            error: 'Failed to execute manual test',
             message: error.message,
         });
     }

@@ -125,6 +125,13 @@ class RabbitMQManager {
         messageTtl: config.rabbitmq.messageTtl, // Message TTL: 24 hours
       };
 
+      // Webhook queue options
+      const webhookQueueOptions = {
+        durable: true,
+        deadLetterExchange: config.rabbitmq.deadLetterExchange,
+        deadLetterRoutingKey: config.rabbitmq.deadLetterQueue,
+      };
+
       // Dead letter queue options
       const dlqOptions = {
         durable: true,
@@ -167,8 +174,19 @@ class RabbitMQManager {
         config.rabbitmq.deadLetterQueue
       );
 
+      // Assert webhook delivery queue
+      await this.channel.assertQueue(config.webhooks.queue, webhookQueueOptions);
+
+      // Bind webhook delivery queue to exchange
+      await this.channel.bindQueue(
+        config.webhooks.queue,
+        config.rabbitmq.mainExchange,
+        config.webhooks.queue
+      );
+
       logger.success("[RABBITMQ] Queues and exchanges configured", {
         mainQueue: config.rabbitmq.queue,
+        webhookQueue: config.webhooks.queue,
         mainExchange: config.rabbitmq.mainExchange,
         deadLetterQueue: config.rabbitmq.deadLetterQueue,
         deadLetterExchange: config.rabbitmq.deadLetterExchange,
@@ -209,7 +227,7 @@ class RabbitMQManager {
   /**
    * Publish message to queue
    */
-  async publish(message, options = {}) {
+  async publish(message, options = {}, queueName = config.rabbitmq.queue) {
     try {
       if (!this.isConnected || !this.channel) {
         throw new Error("RabbitMQ not connected");
@@ -226,32 +244,29 @@ class RabbitMQManager {
 
       const result = this.channel.publish(
         config.rabbitmq.mainExchange,
-        config.rabbitmq.queue, // Use queue name as routing key
+        queueName,
         messageBuffer,
         publishOptions
       );
 
       if (!result) {
         logger.warn("[RABBITMQ] Message buffer full, waiting...", {
-          operation: message.operation,
-          collection: message.collection,
+          queueName,
         });
         // Wait for drain event
         await new Promise((resolve) => this.channel.once("drain", resolve));
       }
 
       logger.debug("[RABBITMQ] Message published", {
-        operation: message.operation,
-        collection: message.collection,
-        messageId: message.messageId,
+        queueName,
+        messageId: message.messageId || message.cdrUuid,
       });
 
       return true;
     } catch (error) {
       logger.error("[RABBITMQ] Publish failed", {
         error: error.message,
-        stack: error.stack,
-        message: message,
+        queueName,
       });
       throw error;
     }

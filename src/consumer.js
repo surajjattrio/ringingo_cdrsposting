@@ -246,53 +246,51 @@ class MongoDBConsumer {
     try {
       const { collection, operation, args } = message;
 
-      logger.debug("[CONSUMER] Triggering webhook delivery", {
+      logger.debug("[CONSUMER] Offloading webhook delivery to queue", {
         collection,
         operation,
         messageId: message.messageId,
       });
 
-      // Prepare CDR data for webhook
-      let cdrsToDeliver = [];
+      // Prepare CDR data for webhook task
+      let cdrsEnqueued = [];
 
       if (operation === "insertOne") {
-        cdrsToDeliver = [args[0]];
+        cdrsEnqueued = [args[0]];
       } else if (operation === "insertMany") {
-        cdrsToDeliver = args[0];
+        cdrsEnqueued = args[0];
       }
 
-      // Queue webhook delivery with  minute delay
-      for (const cdr of cdrsToDeliver) {
-        // Extract tenant UUID
-        const tenantUuid = cdr.tenant_uuid;
+      // Publish each CDR to the webhook delivery queue
+      for (const cdr of cdrsEnqueued) {
+        const webhookTask = {
+          cdrUuid: cdr.uuid,
+          collectionName: collection,
+          tenantUuid: cdr.tenant_uuid,
+          timestamp: new Date().toISOString(),
+          messageId: `webhook_${cdr.uuid}_${Date.now()}`
+        };
 
-        // Schedule webhook delivery after 5 minutes
-        webhookManager
-          .scheduleDelayedDelivery(
-            cdr.uuid, // CDR UUID to fetch later
-            collection, // Collection name
-            tenantUuid, // Tenant filter
-            60000 // 1 minutes in milliseconds
-          )
-          .catch((error) => {
-            logger.error("[CONSUMER] Failed to schedule webhook delivery", {
-              error: error.message,
-              cdrUuid: cdr.uuid,
-              collection,
-            });
-          });
+        // Publish to webhook queue with delay using expiration (TTL)
+        await rabbitMQ.publish(
+          webhookTask,
+          {
+            expiration: config.webhooks.delay.toString(),
+            type: 'webhook_delivery_task'
+          },
+          config.webhooks.queue
+        );
 
         this.webhookDeliveredCount++;
       }
 
-      logger.debug("[CONSUMER] Webhook delivery initiated", {
+      logger.debug("[CONSUMER] Webhook tasks published to RabbitMQ", {
         collection,
-        cdrCount: cdrsToDeliver.length,
+        cdrCount: cdrsEnqueued.length,
         messageId: message.messageId,
       });
     } catch (error) {
-      // Log error but don't fail the message processing
-      logger.error("[CONSUMER] Webhook delivery handling failed", {
+      logger.error("[CONSUMER] Failed to enqueue webhook delivery", {
         error: error.message,
         messageId: message.messageId,
         collection: message.collection,
