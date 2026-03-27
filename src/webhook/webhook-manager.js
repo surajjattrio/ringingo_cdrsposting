@@ -93,6 +93,12 @@ class WebhookManager {
         tenantUuid,
       });
 
+      // Apply delivery delay if configured
+      if (config.webhooks.delay && config.webhooks.delay > 0) {
+        logger.debug(`[WEBHOOK] Waiting for ${config.webhooks.delay}ms delay before processing...`);
+        await new Promise(resolve => setTimeout(resolve, config.webhooks.delay));
+      }
+
       // Fetch fresh CDR data from database
       const db = getDatabase();
       const collection = db.collection(collectionName);
@@ -148,6 +154,8 @@ class WebhookManager {
         // Prepare headers
         const headers = {
           "Content-Type": "application/json",
+          "User-Agent": "curl/7.81.0",
+          "Accept": "*/*",
           ...webhook.headers,
         };
 
@@ -156,18 +164,33 @@ class WebhookManager {
           headers["Authorization"] = `Bearer ${webhook.bearerToken}`;
         }
 
-        // Debug log for headers (masking sensitive data)
         const loggedHeaders = { ...headers };
         if (loggedHeaders["Authorization"]) {
-          loggedHeaders["Authorization"] = "Bearer [MASKED]";
+          loggedHeaders["Authorization"] = `Bearer ${token.substring(0, 10)}...${token.substring(token.length - 5)}`;
         }
-        
-        logger.debug("[WEBHOOK] Request details", {
+
+        logger.info("[WEBHOOK_DEBUG] Exhaustive request details", {
+          webhookName: webhook.name,
           url: webhook.url,
           method: webhook.method,
           headers: loggedHeaders,
-          data: cdr, // Add full CDR payload for inspection
+          rawCdr: {
+            uuid: cdr.uuid,
+            recording_path: cdr.recording_path,
+            user_uuid: cdr.user_uuid,
+            tenant_uuid: cdr.tenant_uuid
+          },
+          transformedData: transformedData
         });
+
+        // Generate equivalent curl command for manual testing
+        const curlHeaders = Object.entries(headers)
+          .map(([key, value]) => `-H '${key}: ${value}'`)
+          .join(" ");
+        const curlPayload = JSON.stringify(transformedData);
+        const curlCommand = `curl -X ${webhook.method} '${webhook.url}' ${curlHeaders} -d '${curlPayload}'`;
+        
+        logger.info("[WEBHOOK_CURL] Copy and test manually:", { curlCommand });
 
         const response = await axios({
           method: webhook.method,
@@ -310,13 +333,23 @@ class WebhookManager {
         cdr.tenant_uuid ? db.collection("tenant").findOne({ uuid: cdr.tenant_uuid }) : null
       ]);
 
+      function formatDate(date) {
+      return new Date(date)
+    .toISOString()
+    .slice(0, 19)
+    .replace('T', ' ');
+}
+
       return {
-        time: cdr.createdAt || new Date().toISOString(),
+        time: formatDate(cdr.createdAt) || formatDate(new Date()),
         call_id: cdr.uuid || "-",
         call_status: cdr.disposition || "-",
         agent_id: cdr.user_uuid || "-",
         agent_name: user ? (user.fullname || user.username || "-") : "-",
-        recording_file: (config.webhooks.recordingBaseUrl || "") + (cdr.recording_path || ""),
+        // recording_file: (cdr.recording_path && fs.existsSync(cdr.recording_path)) 
+        //   ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path 
+        //   : "",
+        recording_file:"",
         team_id: "-",
         team_name: "-",
         client_id: cdr.tenant_uuid || "-",
