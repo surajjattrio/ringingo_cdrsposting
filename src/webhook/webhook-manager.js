@@ -9,6 +9,7 @@ import axios from "axios";
 import https from "https";
 import logger from "../logger.js";
 import { getDatabase } from "../database.js";
+import config from "../config.js";
 
 class WebhookManager {
   constructor() {
@@ -141,6 +142,9 @@ class WebhookManager {
           cdrUuid: cdr.uuid,
         });
 
+        // Transform CDR to client format for delivery
+        const transformedData = await this.transformCDR(cdr);
+
         // Prepare headers
         const headers = {
           "Content-Type": "application/json",
@@ -168,7 +172,7 @@ class WebhookManager {
         const response = await axios({
           method: webhook.method,
           url: webhook.url,
-          data: cdr,
+          data: transformedData,
           headers: headers,
           timeout: webhook.timeout,
           httpsAgent: new https.Agent({
@@ -289,6 +293,55 @@ class WebhookManager {
       statusText: lastError.response?.statusText,
       durationMs: duration
     };
+  }
+
+  /**
+   * Transform internal CDR to client-specific format
+   * @param {Object} cdr - Internal CDR data
+   * @returns {Object} Transformed data
+   */
+  async transformCDR(cdr) {
+    try {
+      const db = getDatabase();
+
+      // Parallel database lookups for agent and tenant names to populate the client format
+      const [user, tenant] = await Promise.all([
+        cdr.user_uuid ? db.collection("user").findOne({ uuid: cdr.user_uuid }) : null,
+        cdr.tenant_uuid ? db.collection("tenant").findOne({ uuid: cdr.tenant_uuid }) : null
+      ]);
+
+      return {
+        time: cdr.createdAt || new Date().toISOString(),
+        call_id: cdr.uuid || "-",
+        call_status: cdr.disposition || "-",
+        agent_id: cdr.user_uuid || "-",
+        agent_name: user ? (user.fullname || user.username || "-") : "-",
+        recording_file: (config.webhooks.recordingBaseUrl || "") + (cdr.recording_path || ""),
+        team_id: "-",
+        team_name: "-",
+        client_id: cdr.tenant_uuid || "-",
+        client_name: tenant ? (tenant.tenant_name || "-") : "-",
+        client_source: "-",
+        client_status: "-",
+        client_last_transaction_date: "-",
+        client_converted_date: "-",
+        client_value: "-",
+        client_country: "-",
+        client_acquisition_date: "-",
+        client_is_converted: "-",
+        client_campaign_id: cdr.campaign_uuid || "-",
+        billsecond: cdr.billsecond || "-",
+        waiting_time: cdr.waiting_time || "-",
+        total_duration: cdr.total_duration || "-",
+        ringing_time: cdr.ringing_time || "-"
+      };
+    } catch (error) {
+      logger.error("[WEBHOOK] CDR transformation failed, sending original data", {
+        error: error.message,
+        cdrUuid: cdr.uuid
+      });
+      return cdr; // Fallback to original data if transformation fails
+    }
   }
 
   /**

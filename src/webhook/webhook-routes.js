@@ -431,16 +431,18 @@ router.post('/webhooks/:id/test', async (req, res) => {
             });
         }
         
-        // Sample CDR data or custom data from request body
-        const sampleCdr = req.body.cdr || {
-            uuid: "test-uuid-" + Date.now(),
-            caller_id_number: "1234567890",
-            destination_number: "9876543210",
-            duration: "60",
-            tenant_uuid: webhook.tenant_uuid || "test-tenant-uuid",
-            is_test: true,
-            companyId: "TEST_COMP_001" // Include common required fields
-        };
+        // Use the payload from request body (nested or flat) if provided, otherwise fallback to a sample CDR
+        const sampleCdr = (req.body && Object.keys(req.body).length > 0) 
+            ? (req.body.cdr || req.body) 
+            : {
+                uuid: "test-uuid-" + Date.now(),
+                caller_id_number: "1234567890",
+                destination_number: "9876543210",
+                duration: "60",
+                tenant_uuid: webhook.tenant_uuid || "test-tenant-uuid",
+                is_test: true,
+                companyId: "TEST_COMP_001" // Include common required fields
+            };
         
         const config = {
           uuid: webhook.uuid,

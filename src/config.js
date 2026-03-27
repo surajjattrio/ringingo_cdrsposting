@@ -103,6 +103,7 @@ const config = {
     webhooks: {
         queue: `freeswitch_webhook_delivery_${process.env.INSTANCE_ID}`,
         delay: 60000, // Default 1 minute
+        recordingBaseUrl: process.env.RECORDING_BASE_URL || "",
     }
 };
 
