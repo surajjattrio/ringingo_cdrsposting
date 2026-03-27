@@ -460,29 +460,37 @@ router.post('/webhooks/:id/test', async (req, res) => {
             url: webhook.webhook_url
         });
         
-        // Use a try-catch for the specific delivery to capture the error for the response
-        try {
-            await webhookManager.deliverToWebhook(config, sampleCdr);
+        // Use the result logic from deliverToWebhook
+        const result = await webhookManager.deliverToWebhook(config, sampleCdr);
+        
+        if (result.success) {
             res.json({
                 success: true,
                 message: 'Test delivery successful.',
                 targetUrl: webhook.webhook_url,
-                cdr: sampleCdr
+                cdr: sampleCdr,
+                serverResponse: {
+                    status: result.statusCode,
+                    statusText: result.statusText,
+                    data: result.responseData,
+                    durationMs: result.durationMs
+                }
             });
-        } catch (deliveryError) {
+        } else {
              logger.warn('[WEBHOOK_API] Manual test delivery failed', {
                 webhookUuid: webhook.uuid,
-                error: deliveryError.message
+                error: result.error
              });
              
              res.status(200).json({ // Return 200 with success: false
                 success: false,
                 message: 'Test delivery failed. Server responded with an error.',
-                error: deliveryError.message,
+                error: result.error,
                 details: {
-                    statusCode: deliveryError.response?.status,
-                    statusText: deliveryError.response?.statusText,
-                    responseData: deliveryError.response?.data
+                    statusCode: result.statusCode,
+                    statusText: result.statusText,
+                    responseData: result.responseData,
+                    durationMs: result.durationMs
                 }
             });
         }

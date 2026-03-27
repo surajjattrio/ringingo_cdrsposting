@@ -205,7 +205,14 @@ class WebhookManager {
           duration,
         });
 
-        return { success: true, webhook: webhook.name };
+        return {
+          success: true,
+          webhook: webhook.name,
+          responseData: response.data,
+          statusCode: response.status,
+          statusText: response.statusText,
+          durationMs: duration
+        };
       } catch (error) {
         lastError = error;
         
@@ -273,7 +280,15 @@ class WebhookManager {
     } catch (dbError) {
       console.error("❌ [WEBHOOK] Database save failed:", dbError.message);
     }
-    return { success: false, webhook: webhook.name, error: lastError.message };
+    return {
+      success: false,
+      webhook: webhook.name,
+      error: lastError.message,
+      responseData: lastError.response?.data,
+      statusCode: lastError.response?.status,
+      statusText: lastError.response?.statusText,
+      durationMs: duration
+    };
   }
 
   /**

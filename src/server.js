@@ -7,6 +7,7 @@
 import express from "express";
 import { v4 as uuidv4 } from "uuid";
 import axios from "axios";
+import https from "https";
 import nodemailer from "nodemailer";
 import { exec } from "child_process";
 import { promisify } from "util";
@@ -1604,6 +1605,9 @@ app.post("/cdrs", async (req, res) => {
             const responseWebhooks = await axios.post(url, webHookData, {
               headers: { "Content-Type": "application/json" },
               timeout: 10000,
+              httpsAgent: new https.Agent({
+                rejectUnauthorized: false,
+              }),
             });
 
             logger.debug("[CDR] Response webhooks", {

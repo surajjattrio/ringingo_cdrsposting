@@ -7,6 +7,9 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+// Bypass SSL certificate verification globally (for internal self-signed certs)
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
 // Validate required environment variables
 const requiredEnvVars = [
     'ESL_HOST',
