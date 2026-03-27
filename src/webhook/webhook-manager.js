@@ -166,7 +166,7 @@ class WebhookManager {
 
         const loggedHeaders = { ...headers };
         if (loggedHeaders["Authorization"]) {
-          loggedHeaders["Authorization"] = `Bearer ${token.substring(0, 10)}...${token.substring(token.length - 5)}`;
+          loggedHeaders["Authorization"] = `Bearer ${webhook?.bearerToken}`;
         }
 
         logger.info("[WEBHOOK_DEBUG] Exhaustive request details", {
@@ -341,7 +341,7 @@ class WebhookManager {
 }
 
       return {
-        time: formatDate(cdr.createdAt) || formatDate(new Date()),
+        time: cdr.createdAt || "-",
         call_id: cdr.uuid || "-",
         call_status: cdr.disposition || "-",
         agent_id: cdr.user_uuid || "-",
