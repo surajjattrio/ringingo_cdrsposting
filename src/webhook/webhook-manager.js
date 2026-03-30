@@ -346,10 +346,7 @@ class WebhookManager {
         call_status: cdr.disposition || "-",
         agent_id: cdr.user_uuid || "-",
         agent_name: user ? (user.fullname || user.username || "-") : "-",
-        // recording_file: (cdr.recording_path && fs.existsSync(cdr.recording_path)) 
-        //   ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path 
-        //   : "",
-        recording_file:"",
+        recording_file: cdr.recording_path ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path : "",
         team_id: "-",
         team_name: "-",
         client_id: cdr.tenant_uuid || "-",

@@ -10,8 +10,73 @@ import { getDatabase } from '../database.js';
 import webhookManager from './webhook-manager.js';
 import logger from '../logger.js';
 import { ObjectId } from 'mongodb';
+import rabbitMQ from '../rabbitmq.js';
+import config from '../config.js';
 
 const router = express.Router();
+/**
+ * POST /api/external/webhook-only
+ * Trigger webhook delivery directly WITHOUT saving to database
+ */
+router.post('/external/webhook-only', async (req, res) => {
+    try {
+        const data = req.body;
+
+        if (!data || Object.keys(data).length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Body data is required and cannot be empty',
+            });
+        }
+
+        // Use uuid from data
+        const cdrUuid = data.uuid
+
+        // Prepare webhook task with full payload to bypass DB lookup in the consumer
+        const webhookTask = {
+            cdrUuid: cdrUuid,
+            collectionName: 'cdrs',
+            tenantUuid: data.tenant_uuid || null,
+            fullCdr: data, // Include the full payload
+            timestamp: new Date().toISOString(),
+            messageId: `webhook_only_${cdrUuid}_${Date.now()}`
+        };
+
+        // Publish directly to the webhook delivery queue using the system's RabbitMQ manager
+        await rabbitMQ.publish(
+            webhookTask,
+            {
+                expiration: config.webhooks.delay?.toString() || "60000",
+                type: 'webhook_delivery_task'
+            },
+            config.webhooks.queue
+        );
+
+        logger.info('[EXTERNAL_WEBHOOK] Webhook-only task queued', {
+            cdrUuid,
+            messageId: webhookTask.messageId,
+            remoteIp: req.ip
+        });
+
+        res.json({
+            success: true,
+            message: 'Webhook-only delivery task queued successfully (Bypassed Database)',
+            messageId: webhookTask.messageId,
+            cdrUuid: cdrUuid
+        });
+
+    } catch (error) {
+        logger.error('[EXTERNAL_WEBHOOK] Failed to process webhook-only push', {
+            error: error.message,
+            stack: error.stack
+        });
+        res.status(500).json({
+            success: false,
+            error: 'Internal system error while queuing webhook task',
+            message: error.message,
+        });
+    }
+});
 
 /**
  * GET /api/webhooks
