@@ -323,7 +323,7 @@ class WebhookManager {
    * @param {Object} cdr - Internal CDR data
    * @returns {Object} Transformed data
    */
-  async transformCDR(cdr) {
+ /* async transformCDR(cdr) {
     try {
       const db = getDatabase();
 
@@ -372,7 +372,62 @@ class WebhookManager {
       });
       return cdr; // Fallback to original data if transformation fails
     }
+  }*/
+
+async transformCDR(cdr) {
+  try {
+    const db = getDatabase();
+
+    const [user, tenant] = await Promise.all([
+      cdr.user_uuid ? db.collection("user").findOne({ uuid: cdr.user_uuid }) : null,
+      cdr.tenant_uuid ? db.collection("tenant").findOne({ uuid: cdr.tenant_uuid }) : null
+    ]);
+
+    const data = {
+      time: cdr.createdAt,
+      call_id: cdr.uuid,
+      call_status: cdr.disposition,
+      agent_id: cdr.user_uuid,
+      agent_name: user?.fullname || user?.username,
+      recording_file: cdr.recording_path
+        ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path
+        : undefined,
+      team_id: undefined,
+      team_name: undefined,
+      client_id: cdr.tenant_uuid,
+      client_name: tenant?.tenant_name,
+      client_source: undefined,
+      client_status: undefined,
+      client_last_transaction_date: undefined,
+      client_converted_date: undefined,
+      client_value: undefined,
+      client_country: undefined,
+      client_acquisition_date: undefined,
+      client_is_converted: undefined,
+      client_campaign_id: cdr.campaign_uuid,
+      billsecond: cdr.billsecond,
+      waiting_time: cdr.waiting_time,
+      total_duration: cdr.total_duration,
+      ringing_time: cdr.ringing_time
+    };
+
+    // remove undefined / null / "-" values
+    const cleaned = Object.fromEntries(
+      Object.entries(data).filter(
+        ([_, v]) => v !== undefined && v !== null && v !== "" && v !== "-"
+      )
+    );
+
+    return cleaned;
+
+  } catch (error) {
+    logger.error("[WEBHOOK] CDR transformation failed, sending original data", {
+      error: error.message,
+      cdrUuid: cdr.uuid
+    });
+    return cdr;
   }
+}
 
   /**
    * Log webhook delivery to database
