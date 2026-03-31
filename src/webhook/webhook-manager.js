@@ -323,60 +323,74 @@ class WebhookManager {
    * @param {Object} cdr - Internal CDR data
    * @returns {Object} Transformed data
    */
- /* async transformCDR(cdr) {
+  async transformCDR(cdr) {
     try {
       const db = getDatabase();
 
-      // Parallel database lookups for agent and tenant names to populate the client format
-      const [user, tenant] = await Promise.all([
-        cdr.user_uuid ? db.collection("user").findOne({ uuid: cdr.user_uuid }) : null,
-        cdr.tenant_uuid ? db.collection("tenant").findOne({ uuid: cdr.tenant_uuid }) : null
-      ]);
+      // Special case for convoz - V-Xpress NMC
+      if (cdr.tenant_uuid === "1f84dd0e-f557-4712-94a1-675d9b5e42e1") {
+        const [user, note] = await Promise.all([
+          cdr.user_uuid ? db.collection("user").findOne({ uuid: cdr.user_uuid }) : null,
+          cdr.custom_callid ? db.collection("notes").findOne({ cdrs_uuid: cdr.custom_callid }) : null
+        ]);
 
-      function formatDate(date) {
-      return new Date(date)
-    .toISOString()
-    .slice(0, 19)
-    .replace('T', ' ');
-}
+        let disposition = "-";
+        let subDisposition = "-";
+        const dispositionId = cdr.hangup_cause || "-";
 
-      return {
-        time: cdr.createdAt || "-",
-        call_id: cdr.uuid || "-",
-        call_status: cdr.disposition || "-",
-        agent_id: cdr.user_uuid || "-",
-        agent_name: user ? (user.fullname || user.username || "-") : "-",
-        recording_file: cdr.recording_path ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path : "",
-        team_id: "-",
-        team_name: "-",
-        client_id: cdr.tenant_uuid || "-",
-        client_name: tenant ? (tenant.tenant_name || "-") : "-",
-        client_source: "-",
-        client_status: "-",
-        client_last_transaction_date: "-",
-        client_converted_date: "-",
-        client_value: "-",
-        client_country: "-",
-        client_acquisition_date: "-",
-        client_is_converted: "-",
-        client_campaign_id: cdr.campaign_uuid || "-",
-        billsecond: cdr.billsecond || "-",
-        waiting_time: cdr.waiting_time || "-",
-        total_duration: cdr.total_duration || "-",
-        ringing_time: cdr.ringing_time || "-"
-      };
-    } catch (error) {
-      logger.error("[WEBHOOK] CDR transformation failed, sending original data", {
-        error: error.message,
-        cdrUuid: cdr.uuid
-      });
-      return cdr; // Fallback to original data if transformation fails
-    }
-  }*/
+        if (cdr.hangup_cause && cdr.hangup_cause !== "") {
+          try {
+            const path = [];
+            let currentUuid = cdr.hangup_cause;
+            
+            // Support up to 3 levels of hierarchy (Leaf -> Middle -> Root)
+            for (let i = 0; i < 3; i++) {
+              const disp = await db.collection("disposition").findOne({ disposition_uuid: currentUuid });
+              if (!disp) break;
+              path.unshift(disp.name); // Push to start to get Root -> Middle -> Leaf order
+              if (!disp.parent_disposition || disp.parent_disposition === "") break;
+              currentUuid = disp.parent_disposition;
+            }
 
-async transformCDR(cdr) {
-  try {
-    const db = getDatabase();
+            if (path.length > 0) {
+              disposition = path[0]; // Root level
+              subDisposition = path[1] || "-"; // Next level
+            }
+          } catch (e) {
+            logger.warn("[WEBHOOK] Disposition hierarchy lookup failed", { 
+              error: e.message, 
+              hangup_cause: cdr.hangup_cause 
+            });
+          }
+        }
+
+        return {
+          rigningoData: [
+            {
+              dialerId: cdr.uuid || "-",
+              uniqueId: cdr.uuid || "-",
+              agentId: cdr.user_uuid || "-",
+              agentName: user?.fullname || user?.username || "-",
+              callDirection: cdr.direction || "-",
+              callDate: cdr.callstart,
+              endDate: cdr.callend,
+              callDuration: cdr.total_duration || "-",
+              dispositionId: dispositionId,
+              disposition: disposition,
+              subDisposition: subDisposition,
+              comment: note?.comment || "-",
+              hangUpBy: cdr.disconnected_by === "0" ? "Agent" : 
+                        cdr.disconnected_by === "1" ? "Customer" : 
+                        cdr.disconnected_by === "2" ? "System" : 
+                        cdr.disconnected_by || "-",
+              campaignId: cdr.campaign_uuid || "-",
+              customerName: cdr.caller_id_name || cdr.destination_number || "-",
+              recordingUrl: cdr.recording_path ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path : "",
+              companyId: cdr.tenant_uuid || "-"
+            }
+          ]
+        };
+      }
 
     const [user, tenant] = await Promise.all([
       cdr.user_uuid ? db.collection("user").findOne({ uuid: cdr.user_uuid }) : null,
