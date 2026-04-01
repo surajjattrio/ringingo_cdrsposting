@@ -97,7 +97,7 @@ class MongoDBConsumer {
       logger.success("[CONSUMER] Consumer started successfully");
 
       // Log stats every 10 minutes
-      this.startStatsLogger();
+      // this.startStatsLogger();
     } catch (error) {
       logger.error("[CONSUMER] Failed to start consumer", {
         error: error.message,
