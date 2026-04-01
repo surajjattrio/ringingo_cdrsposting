@@ -149,7 +149,7 @@ class WebhookManager {
         });
 
         // Transform CDR to client format for delivery
-        const transformedData = await this.transformCDR(cdr);
+        const transformedData = await this.transformCDR(cdr, webhook.uuid);
 
         // Prepare headers
         const headers = {
@@ -228,6 +228,8 @@ class WebhookManager {
           cdrUuid: cdr.uuid,
           status: "success",
           statusCode: response.status,
+          statusText: response.statusText,
+          responseData: response.data,
           attempt,
           duration,
         });
@@ -321,14 +323,16 @@ class WebhookManager {
   /**
    * Transform internal CDR to client-specific format
    * @param {Object} cdr - Internal CDR data
+   * @param {string} webhookUuid - Webhook UUID for conditional transformation
    * @returns {Object} Transformed data
    */
-  async transformCDR(cdr) {
+  async transformCDR(cdr, webhookUuid = null) {
     try {
       const db = getDatabase();
 
-      // Special case for convoz - V-Xpress NMC
-      if (cdr.tenant_uuid === "1f84dd0e-f557-4712-94a1-675d9b5e42e1") {
+      // Special case for convoz - V-Xpress NMC and percorner
+      if ((cdr.tenant_uuid === "1f84dd0e-f557-4712-94a1-675d9b5e42e1" || cdr.tenant_uuid === "cf98c767-2404-484e-888b-e53897315d5a") && 
+          (webhookUuid === "e5d92ded-4ade-4ca3-97df-7ac7edd9d91a" || webhookUuid === "6a6da557-4747-4d4b-b39f-5948e65b726e")) {
         const [user, note] = await Promise.all([
           cdr.user_uuid ? db.collection("user").findOne({ uuid: cdr.user_uuid }) : null,
           cdr.custom_callid ? db.collection("notes").findOne({ cdrs_uuid: cdr.custom_callid }) : null

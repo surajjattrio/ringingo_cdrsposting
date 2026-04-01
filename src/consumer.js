@@ -441,26 +441,26 @@ class MongoDBConsumer {
   /**
    * Start stats logger
    */
-  startStatsLogger() {
-    setInterval(() => {
-      const webhookStats = webhookManager.getStats();
+  // startStatsLogger() {
+  //   setInterval(() => {
+  //     const webhookStats = webhookManager.getStats();
 
-      logger.info("[CONSUMER] Stats", {
-        processed: this.processedCount,
-        failed: this.failedCount,
-        webhookDelivered: this.webhookDeliveredCount,
-        successRate:
-          this.processedCount > 0
-            ? (
-                (this.processedCount /
-                  (this.processedCount + this.failedCount)) *
-                100
-              ).toFixed(2) + "%"
-            : "N/A",
-        webhookStats,
-      });
-    }, 600000); // Every 10 minutes
-  }
+  //     logger.info("[CONSUMER] Stats", {
+  //       processed: this.processedCount,
+  //       failed: this.failedCount,
+  //       webhookDelivered: this.webhookDeliveredCount,
+  //       successRate:
+  //         this.processedCount > 0
+  //           ? (
+  //               (this.processedCount /
+  //                 (this.processedCount + this.failedCount)) *
+  //               100
+  //             ).toFixed(2) + "%"
+  //           : "N/A",
+  //       webhookStats,
+  //     });
+  //   }, 600000); // Every 10 minutes
+  // }
 
   /**
    * Stop consuming
