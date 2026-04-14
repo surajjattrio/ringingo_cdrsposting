@@ -10,6 +10,7 @@ import { connectMongoDB, closeMongoDB, checkConnection, reconnectMongoDB } from 
 import rabbitMQ from "./rabbitmq.js";
 import consumer from "./consumer.js";
 import webhookConsumer from "./webhook/webhook-consumer.js";
+import uaeWebhookConsumer from "./webhook/webhook-uae-consumer.js";
 
 /**
  * Start consumer service with webhook support
@@ -36,6 +37,10 @@ async function startConsumerService() {
     // Start consuming messages (Webhook Delivery Tasks)
     await webhookConsumer.start();
     logger.success("✅ Webhook consumer started successfully");
+
+    // Start consuming UAE messages
+    await uaeWebhookConsumer.start();
+    logger.success("✅ UAE Webhook consumer started successfully");
 
     logger.info("==============================");
     logger.info("[CONSUMER_SERVICE] Consumer Service Running");
@@ -64,6 +69,7 @@ async function startConsumerService() {
 
       await consumer.stop();
       await webhookConsumer.stop();
+      await uaeWebhookConsumer.stop();
       logger.info("Consumers stopped");
 
       await rabbitMQ.close();

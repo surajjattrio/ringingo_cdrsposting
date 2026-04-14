@@ -184,9 +184,21 @@ class RabbitMQManager {
         config.webhooks.queue
       );
 
+      // Assert UAE-specific webhook delivery queue
+      const uaeWebhookQueue = "_uae_" + config.webhooks.queue;
+      await this.channel.assertQueue(uaeWebhookQueue, webhookQueueOptions);
+
+      // Bind UAE-specific webhook delivery queue to exchange
+      await this.channel.bindQueue(
+        uaeWebhookQueue,
+        config.rabbitmq.mainExchange,
+        uaeWebhookQueue
+      );
+
       logger.success("[RABBITMQ] Queues and exchanges configured", {
         mainQueue: config.rabbitmq.queue,
         webhookQueue: config.webhooks.queue,
+        uaeWebhookQueue: uaeWebhookQueue,
         mainExchange: config.rabbitmq.mainExchange,
         deadLetterQueue: config.rabbitmq.deadLetterQueue,
         deadLetterExchange: config.rabbitmq.deadLetterExchange,

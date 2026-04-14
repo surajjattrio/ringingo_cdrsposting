@@ -12,6 +12,11 @@ let db = null;
 let isConnected = false;
 let isReconnecting = false;
 
+// UAE Specialized Connection
+let uaeClient = null;
+let uaeDb = null;
+let uaeIsConnected = false;
+
 /**
  * Initialize MongoDB connection
  */
@@ -61,11 +66,57 @@ function getDatabase() {
 }
 
 /**
+ * Get UAE specialized database instance
+ */
+async function getUAEDatabase() {
+    try {
+        if (uaeIsConnected && uaeDb) {
+            return uaeDb;
+        }
+
+        const uaeUrl = "mongodb://db_pbxcc:dbYDHPyrRSnd@4.240.102.209:27017/admin";
+        
+        logger.info('[MONGODB_UAE] Connecting to UAE MongoDB...');
+
+        uaeClient = new MongoClient(uaeUrl, config.mongodb.options);
+        await uaeClient.connect();
+        
+        // Use admin as the target database
+        uaeDb = uaeClient.db("admin");
+        uaeIsConnected = true;
+
+        logger.info('[MONGODB_UAE] UAE Connection successful', {
+            database: "admin"
+        });
+        return uaeDb;
+    } catch (error) {
+        logger.error('[MONGODB_UAE] UAE Connection failed', {
+            error: error.message
+        });
+        throw error;
+    }
+}
+
+/**
  * Get all collections used in the application
  */
 function getCollections() {
     const database = getDatabase();
-    
+    return _mapCollections(database);
+}
+
+/**
+ * Get all UAE collections
+ */
+async function getUAECollections() {
+    const database = await getUAEDatabase();
+    return _mapCollections(database);
+}
+
+/**
+ * Helper to map collections for a DB instance
+ */
+function _mapCollections(database) {
     return {
         // Main CDR collections
         cdrs: database.collection('cdrs'),
@@ -109,6 +160,8 @@ function getCollections() {
         agentLiveReport: database.collection('agent_live_report'),
         ipMap: database.collection('ip_map'),
         voiceBroadcastDetails: database.collection('voice_broadcast_details'),
+        webhook_delivery_logs: database.collection('webhook_delivery_logs'),
+        notes: database.collection('notes'),
     };
 }
 
@@ -196,6 +249,8 @@ export {
     connectMongoDB,
     getDatabase,
     getCollections,
+    getUAEDatabase,
+    getUAECollections,
     closeMongoDB,
     isMongoDBConnected,
     reconnectMongoDB,

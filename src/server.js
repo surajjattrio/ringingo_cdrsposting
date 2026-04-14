@@ -25,6 +25,7 @@ import { checkRegistration } from "./register.js";
 import rabbitMQ from "./rabbitmq.js";
 import { wrapCollectionsWithQueue } from "./mongodb-queue-wrapper.js";
 import webhookRoutes from "./webhook/webhook-routes.js";
+import uaeWebhookRoutes from "./webhook/webhook-uae-routes.js";
 import googleDriveRoutes from "./googledrive/google-drive-routes.js";
 import googleDriveUploader from "./googledrive/google-drive-uploader.js";
 import googleDriveSettingsManager from "./googledrive/google-drive-settings-manager.js";
@@ -45,6 +46,7 @@ app.use(
   express.urlencoded({ extended: true, limit: config.app.maxRequestSize })
 );
 app.use("/api", webhookRoutes);
+app.use("/api", uaeWebhookRoutes);
 app.use("/api", googleDriveRoutes);
 
 /**
