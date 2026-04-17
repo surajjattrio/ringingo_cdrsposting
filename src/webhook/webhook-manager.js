@@ -333,10 +333,15 @@ class WebhookManager {
       // Special case for convoz - V-Xpress NMC and percorner
       if ((cdr.tenant_uuid === "1f84dd0e-f557-4712-94a1-675d9b5e42e1" || cdr.tenant_uuid === "cf98c767-2404-484e-888b-e53897315d5a") && 
           (webhookUuid === "e5d92ded-4ade-4ca3-97df-7ac7edd9d91a" || webhookUuid === "6a6da557-4747-4d4b-b39f-5948e65b726e")) {
-        const [user, note] = await Promise.all([
+        const [user, note, campaignInbound, campaignOutbound, campaignBlended] = await Promise.all([
           cdr.user_uuid ? db.collection("user").findOne({ uuid: cdr.user_uuid }) : null,
-          cdr.custom_callid ? db.collection("notes").findOne({ cdrs_uuid: cdr.custom_callid }) : null
+          cdr.custom_callid ? db.collection("notes").findOne({ cdrs_uuid: cdr.custom_callid }) : null,
+          cdr.campaign_uuid ? db.collection("inbound_campaign").findOne({ uuid: cdr.campaign_uuid }) : null,
+          cdr.campaign_uuid ? db.collection("outbound_campaign").findOne({ uuid: cdr.campaign_uuid }) : null,
+          cdr.campaign_uuid ? db.collection("blended_campaign").findOne({ uuid: cdr.campaign_uuid }) : null
         ]);
+
+        const campaign = campaignInbound || campaignOutbound || campaignBlended;
 
         let disposition = "-";
         let subDisposition = "-";
@@ -388,7 +393,8 @@ class WebhookManager {
                         cdr.disconnected_by === "2" ? "System" : 
                         cdr.disconnected_by || "-",
               campaignId: cdr.campaign_uuid || "-",
-              customerName: cdr.caller_id_name || cdr.destination_number || "-",
+              campaignName: campaign?.name || "-",
+              customerName: "-",
               recordingUrl: cdr.recording_path ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path : "",
               companyId: cdr.tenant_uuid || "-"
             }
