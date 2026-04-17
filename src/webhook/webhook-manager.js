@@ -396,7 +396,8 @@ class WebhookManager {
               campaignName: campaign?.name || "-",
               customerName: "-",
               recordingUrl: cdr.recording_path ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path : "",
-              companyId: cdr.tenant_uuid || "-"
+              companyId: cdr.tenant_uuid || "-",
+              campaignMobile: cdr.destination_number || "-"
             }
           ]
         };
