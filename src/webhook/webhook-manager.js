@@ -330,8 +330,8 @@ class WebhookManager {
     try {
       const db = getDatabase();
 
-      // Special case for specific tenant format
-      if (cdr.tenant_uuid === "9dbdf22c-6603-4843-ad9e-8e7454d29b95") {
+      // Special case for specific tenant format - vyapar
+      if (cdr.tenant_uuid === "f20b1a37-6234-4151-9a71-b2f99f1578fd") {
         const [hangupCause] = await Promise.all([
           cdr.hangup_cause ? db.collection("disposition").findOne({ disposition_uuid: cdr.hangup_cause }) : null,
         ]);
