@@ -330,6 +330,77 @@ class WebhookManager {
     try {
       const db = getDatabase();
 
+      // Special case for specific tenant format
+      if (cdr.tenant_uuid === "9dbdf22c-6603-4843-ad9e-8e7454d29b95") {
+        const [hangupCause] = await Promise.all([
+          cdr.hangup_cause ? db.collection("disposition").findOne({ disposition_uuid: cdr.hangup_cause }) : null,
+        ]);
+
+        const formatDuration = (seconds) => {
+          if (!seconds || isNaN(seconds)) return "00:00:00";
+          const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
+          const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+          const s = Math.floor(seconds % 60).toString().padStart(2, '0');
+          return `${h}:${m}:${s}`;
+        };
+
+        const callstart = cdr.callstart || "";
+        const callend = cdr.callend || "";
+        
+        // Extract date and time from callstart (format: YYYY-MM-DD HH:mm:ss)
+        const datePart = callstart.split(" ")[0] || "";
+        const timePart = callstart.split(" ")[1] || "";
+
+        // outbound -> caller_id_number
+        // inbound - > destination_number
+        let agent_number 
+        if (cdr.direction === "outbound") {
+          agent_number = cdr.caller_id_number;
+        } else {
+          agent_number = cdr.destination_number;
+        }
+
+        //  1 = inbound
+        //  2 = outbound
+        //  2 = default
+        let event = "2";
+        if (cdr.direction === "inbound") {
+          event = "1";
+        } else {
+          event = "2";
+        }
+
+        return {
+          "Incoming Webhook Payload": [
+            {
+              "call_date": datePart,
+              "call_time": timePart,
+              "customer_status": hangupCause?.name || "",
+              "customer_number": cdr.direction === "inbound" ? (cdr.caller_id_number || "") : (cdr.destination_number || ""),
+              "customer_call_duration": formatDuration(cdr.billsecond),//actual talktime need to send 
+              "call_transfer_duration": "",//need these field
+              "call_duration": formatDuration(cdr.total_duration),
+              "call_uuid": cdr.uuid || "",
+              "call_id": cdr._id || "",
+              "call_status": hangupCause?.name || "",
+              "call_transfer_status": "",//need these field
+              "agent_number": agent_number || "",
+              "menu": "",//need these field
+              "event": event,
+              "start_time": callstart, // actualy time when agent pick the call
+              "end_time": callend,
+              "hangup_by": cdr.disconnected_by === "0" ? "Agent" : (cdr.disconnected_by === "1" ? "Customer" : (cdr.disconnected_by === "2" ? "System" : null)),
+              "recording_url": cdr.recording_path ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path : "",
+              "knowlarity_number": agent_number,
+              "queue_id": cdr.pbx_feature === "call_queue" ? (cdr.pbx_feature_uuid || "") : "",
+              "LegC_agent_number": "",//need these field
+              "LegC_conversation_duration": "",//need these field
+              "transfer_queue_name": ""//need these field
+            }
+          ]
+        };
+      }
+
       // Special case for convoz - V-Xpress NMC and percorner
       if ((cdr.tenant_uuid === "1f84dd0e-f557-4712-94a1-675d9b5e42e1" || cdr.tenant_uuid === "cf98c767-2404-484e-888b-e53897315d5a") && 
           (webhookUuid === "e5d92ded-4ade-4ca3-97df-7ac7edd9d91a" || webhookUuid === "6a6da557-4747-4d4b-b39f-5948e65b726e")) {
