@@ -395,7 +395,8 @@ class WebhookManager {
               "queue_id": cdr.pbx_feature === "call_queue" ? (cdr.pbx_feature_uuid || "") : "",
               "LegC_agent_number": "",//need these field
               "LegC_conversation_duration": "",//need these field
-              "transfer_queue_name": ""//need these field
+              "transfer_queue_name": "",//need these field
+              "lead_uuid": cdr.lead_uuid || "",
             }
           ]
         };

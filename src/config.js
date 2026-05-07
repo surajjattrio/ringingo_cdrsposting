@@ -21,7 +21,8 @@ const requiredEnvVars = [
     'RABBITMQ_HOST',
     'RABBITMQ_PORT',
     'RABBITMQ_USER',
-    'RABBITMQ_PASSWORD'
+    'RABBITMQ_PASSWORD',
+    'WEBHOOK_POST_DELAY',
 ];
 
 const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
@@ -102,7 +103,7 @@ const config = {
 
     webhooks: {
         queue: `freeswitch_webhook_delivery_${process.env.INSTANCE_ID}`,
-        delay: 60000, // Default 1 minute
+        delay: process.env.WEBHOOK_POST_DELAY || 60000, // Default 1 minute
         recordingBaseUrl: process.env.RECORDING_BASE_URL || "",
     }
 };
