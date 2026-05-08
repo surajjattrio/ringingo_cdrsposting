@@ -385,6 +385,7 @@ class WebhookManager {
               "call_status": hangupCause?.name || "",
               "call_transfer_status": "",//need these field
               "agent_number": agent_number || "",
+              "agent_uuid": cdr.user_uuid || "",
               "menu": "",//need these field
               "event": event,
               "start_time": callstart, // actualy time when agent pick the call
