@@ -370,6 +370,25 @@ class WebhookManager {
           event = "2";
         }
 
+        const actual_talktime =
+          cdr.direction === "inbound"
+            ? cdr.actual_talktime
+            : String(cdr.dial_method) === "1"
+              ? cdr.user_uuid && String(cdr.user_uuid).trim() !== ""
+                ? cdr.billsecond
+                : 0
+              : cdr.billsecond;
+
+        const call_status =
+          cdr.direction === "inbound"
+            ? Number(cdr?.actual_talktime) > 0
+              ? "Connected"
+              : "Abandoned"
+            : cdr.direction === "outbound"
+              ? actual_talktime != "0"
+                ? "Connected"
+                : "Not Connected"
+              : "Not Connected";
         return {
           "Incoming Webhook Payload": [
             {
@@ -382,7 +401,7 @@ class WebhookManager {
               "call_duration": formatDuration(cdr.total_duration),
               "call_uuid": cdr.uuid || "",
               "call_id": cdr._id || "",
-              "call_status": hangupCause?.name || "",
+              "call_status": call_status || "",
               "call_transfer_status": "",//need these field
               "agent_number": agent_number || "",
               "agent_uuid": cdr.user_uuid || "",
