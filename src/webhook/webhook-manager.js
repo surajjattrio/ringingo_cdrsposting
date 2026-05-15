@@ -443,6 +443,7 @@ class WebhookManager {
               "call_uuid": cdr.uuid || "",
               "call_id": cdr._id || "",
               "call_status": call_status || "",
+              "disposition": cdr?.disposition || "",
               "call_transfer_status": "",//need these field
               "agent_number": agent_number || "",
               "agent_uuid": cdr.user_uuid || "",
