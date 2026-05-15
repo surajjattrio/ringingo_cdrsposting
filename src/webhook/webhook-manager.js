@@ -21,6 +21,46 @@ class WebhookManager {
   }
 
   /**
+   * Convert UTC datetime string to IST (Indian Standard Time - UTC+5:30)
+   * @param {string} utcDateTimeStr - UTC datetime string in format "YYYY-MM-DD HH:mm:ss"
+   * @returns {string} IST datetime string in format "YYYY-MM-DD HH:mm:ss"
+   */
+  convertUtcToIst(utcDateTimeStr) {
+    if (!utcDateTimeStr || typeof utcDateTimeStr !== 'string') {
+      return utcDateTimeStr;
+    }
+
+    try {
+      // Parse the UTC datetime string
+      const utcDate = new Date(utcDateTimeStr);
+      
+      if (isNaN(utcDate.getTime())) {
+        logger.warn("[WEBHOOK] Invalid UTC datetime format", { utcDateTimeStr });
+        return utcDateTimeStr;
+      }
+
+      // IST is UTC+5:30
+      const istDate = new Date(utcDate.getTime() + (5.5 * 60 * 60 * 1000));
+
+      // Format as "YYYY-MM-DD HH:mm:ss"
+      const year = istDate.getUTCFullYear();
+      const month = String(istDate.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(istDate.getUTCDate()).padStart(2, '0');
+      const hours = String(istDate.getUTCHours()).padStart(2, '0');
+      const minutes = String(istDate.getUTCMinutes()).padStart(2, '0');
+      const seconds = String(istDate.getUTCSeconds()).padStart(2, '0');
+
+      return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+    } catch (error) {
+      logger.error("[WEBHOOK] UTC to IST conversion failed", {
+        error: error.message,
+        utcDateTimeStr
+      });
+      return utcDateTimeStr;
+    }
+  }
+
+  /**
    * Deliver CDR to all active webhooks for a tenant
    * @param {Object} cdr - CDR data to send
    * @param {string} tenantUuid - Tenant filter
@@ -344,7 +384,8 @@ class WebhookManager {
           return `${h}:${m}:${s}`;
         };
 
-        const callstart = cdr.callstart || "";
+        // Convert UTC timestamps to IST (Indian Standard Time)
+        const callstart = this.convertUtcToIst(cdr.callstart) || "";
         const callend = cdr.callend || "";
         
         // Extract date and time from callstart (format: YYYY-MM-DD HH:mm:ss)
@@ -473,7 +514,7 @@ class WebhookManager {
               agentId: cdr.user_uuid || "-",
               agentName: user?.fullname || user?.username || "-",
               callDirection: cdr.direction || "-",
-              callDate: cdr.callstart,
+              callDate: this.convertUtcToIst(cdr.callstart) || "-",
               endDate: cdr.callend,
               callDuration: cdr.total_duration || "-",
               dispositionId: dispositionId,
@@ -501,7 +542,7 @@ class WebhookManager {
     ]);
 
     const data = {
-      time: cdr.createdAt,
+      time: this.convertUtcToIst(cdr.createdAt),
       call_id: cdr.uuid,
       call_status: cdr.disposition,
       agent_id: cdr.user_uuid,
