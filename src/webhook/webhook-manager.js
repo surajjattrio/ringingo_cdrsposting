@@ -538,6 +538,83 @@ class WebhookManager {
           ]
         };
       }
+      // Special case for Sampann Finance
+      if (cdr.tenant_uuid === "1f84dd0e-f557-4712-94a1-675d9b5e42e1"){
+        const [user, lead, campaign, notes] = await Promise.all([
+          cdr.user_uuid ? db.collection("user").findOne({ uuid: cdr.user_uuid }) : null,
+          cdr.lead_uuid ? db.collection("lead_management").findOne({ lead_management_uuid: cdr.lead_uuid }) : null,
+          cdr.campaign_uuid ? db.collection("blended_campaign").findOne({ uuid: cdr.campaign_uuid }) || 
+                              db.collection("inbound_campaign").findOne({ uuid: cdr.campaign_uuid }) ||
+                              db.collection("outbound_campaign").findOne({ uuid: cdr.campaign_uuid }) : null,
+          cdr.custom_callid ? db.collection("notes").findOne({ cdrs_uuid: cdr.custom_callid }) : null
+        ]);
+
+        // Map dial method to readable format
+        const dialMethodMap = {
+          "1": "Auto Dial",
+          "2": "Manual Dial",
+          "3": "Preview Dial"
+        };
+        const dialMethod = dialMethodMap[String(cdr.dial_method)] || "-";
+
+        // Map disconnected by to readable format
+        const disconnectedByMap = {
+          "0": "Agent",
+          "1": "Customer",
+          "2": "System"
+        };
+        const disconnectedBy = disconnectedByMap[String(cdr.disconnected_by)] || "-";
+
+        // Get IVR/CQ Name
+        let ivrCqName = "-";
+        if (cdr.pbx_feature === "ivr" && cdr.pbx_feature_uuid) {
+          const ivrRecord = await db.collection("ivr").findOne({ uuid: cdr.pbx_feature_uuid });
+          ivrCqName = ivrRecord?.name || "-";
+        } else if (cdr.pbx_feature === "call_queue" && cdr.pbx_feature_uuid) {
+          const queueRecord = await db.collection("call_queue").findOne({ uuid: cdr.pbx_feature_uuid });
+          ivrCqName = queueRecord?.name || "-";
+        }
+
+        // Get user group name
+        let userGroupName = "-";
+        if (user?.user_group_uuid) {
+          const userGroup = await db.collection("user_group").findOne({ uuid: user.user_group_uuid });
+          userGroupName = userGroup?.name || "-";
+        }
+
+        // Get lead group name
+        let leadGroupName = "-";
+        if (lead?.lead_group_uuid) {
+          const leadGroup = await db.collection("lead_group").findOne({ uuid: lead.lead_group_uuid });
+          leadGroupName = leadGroup?.name || "-";
+        }
+
+        return {
+          "Start Date": this.convertUtcToIst(cdr.callstart) || "-",
+          "End Date": this.convertUtcToIst(cdr.callend) || "-",
+          "Caller ID Number": cdr.caller_id_number || "-",
+          "DID / Phone Number": cdr.destination_number || "-",
+          "User ID": cdr.sip_user || cdr.user_uuid || "-",
+          "Full Name": user?.fullname || user?.username || "-",
+          "User Group Name": userGroupName,
+          "IVR/CQ Name": ivrCqName,
+          "Duration": cdr.total_duration || "-",
+          "Answer Time": cdr.billsecond || "-",
+          "Hold Time": cdr.hold_time || "-",
+          "Waiting Time": cdr.waiting_time || "-",
+          "Ringing Time": cdr.ringing_time || "-",
+          "Campaign": campaign?.name || "-",
+          "Lead Group Name": leadGroupName,
+          "Dial Method": dialMethod,
+          "Disconnected By": disconnectedBy,
+          "Disposition": cdr.hangup_cause || cdr.disposition || "-",
+          "Sub Disposition 1": "-",
+          "Sub Disposition 2": "-",
+          "Direction": cdr.direction ? (cdr.direction === "inbound" ? "Inbound" : "Outbound") : "-",
+          "Comment": notes?.comment || "-",
+          "Recording": cdr.recording_path ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path : "-"
+        };
+      } 
 
     const [user, tenant] = await Promise.all([
       cdr.user_uuid ? db.collection("user").findOne({ uuid: cdr.user_uuid }) : null,
