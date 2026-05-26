@@ -549,6 +549,16 @@ class WebhookManager {
           cdr.custom_callid ? db.collection("notes").findOne({ cdrs_uuid: cdr.custom_callid }) : null
         ]);
 
+        // Format duration to HH:MM:SS
+        const formatDuration = (seconds) => {
+          if (!seconds || isNaN(seconds)) return "00:00:00";
+          const sec = parseInt(seconds) || 0;
+          const h = Math.floor(sec / 3600).toString().padStart(2, '0');
+          const m = Math.floor((sec % 3600) / 60).toString().padStart(2, '0');
+          const s = Math.floor(sec % 60).toString().padStart(2, '0');
+          return `${h}:${m}:${s}`;
+        };
+
         // Map dial method to readable format
         const dialMethodMap = {
           "1": "Auto Dial",
@@ -589,6 +599,37 @@ class WebhookManager {
           leadGroupName = leadGroup?.name || "-";
         }
 
+        // Extract disposition hierarchy (ROOT -> ... -> CHILD)
+        let disposition = "-";
+        let subDisposition1 = "-";
+        let subDisposition2 = "-";
+        if (cdr.hangup_cause && cdr.hangup_cause !== "") {
+          try {
+            const path = [];
+            let currentUuid = cdr.hangup_cause;
+            
+            // Support up to 3 levels of hierarchy
+            for (let i = 0; i < 3; i++) {
+              const disp = await db.collection("disposition").findOne({ disposition_uuid: currentUuid });
+              if (!disp) break;
+              path.unshift(disp.name); // Push to start to get Root -> Middle -> Leaf order
+              if (!disp.parent_disposition || disp.parent_disposition === "") break;
+              currentUuid = disp.parent_disposition;
+            }
+
+            if (path.length > 0) {
+              disposition = path[0] || "-";
+              subDisposition1 = path[1] || "-";
+              subDisposition2 = path[2] || "-";
+            }
+          } catch (e) {
+            logger.warn("[WEBHOOK] Disposition hierarchy lookup failed for Sampann", { 
+              error: e.message, 
+              hangup_cause: cdr.hangup_cause 
+            });
+          }
+        }
+
         return {
           "Start Date": this.convertUtcToIst(cdr.callstart) || "-",
           "End Date": this.convertUtcToIst(cdr.callend) || "-",
@@ -598,18 +639,18 @@ class WebhookManager {
           "Full Name": user?.fullname || user?.username || "-",
           "User Group Name": userGroupName,
           "IVR/CQ Name": ivrCqName,
-          "Duration": cdr.total_duration || "-",
-          "Answer Time": cdr.billsecond || "-",
-          "Hold Time": cdr.hold_time || "-",
-          "Waiting Time": cdr.waiting_time || "-",
-          "Ringing Time": cdr.ringing_time || "-",
+          "Duration": formatDuration(cdr.total_duration),
+          "Answer Time": formatDuration(cdr.billsecond),
+          "Hold Time": formatDuration(cdr.hold_time),
+          "Waiting Time": formatDuration(cdr.waiting_time),
+          "Ringing Time": formatDuration(cdr.ringing_time),
           "Campaign": campaign?.name || "-",
           "Lead Group Name": leadGroupName,
           "Dial Method": dialMethod,
           "Disconnected By": disconnectedBy,
-          "Disposition": cdr.hangup_cause || cdr.disposition || "-",
-          "Sub Disposition 1": "-",
-          "Sub Disposition 2": "-",
+          "Disposition": disposition,
+          "Sub Disposition 1": subDisposition1,
+          "Sub Disposition 2": subDisposition2,
           "Direction": cdr.direction ? (cdr.direction === "inbound" ? "Inbound" : "Outbound") : "-",
           "Comment": notes?.comment || "-",
           "Recording": cdr.recording_path ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path : "-"
