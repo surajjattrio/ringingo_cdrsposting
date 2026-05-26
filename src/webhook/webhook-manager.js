@@ -372,8 +372,9 @@ class WebhookManager {
 
       // Special case for specific tenant format - vyapar
       if (cdr.tenant_uuid === "f20b1a37-6234-4151-9a71-b2f99f1578fd") {
-        const [hangupCause] = await Promise.all([
+        const [hangupCause,lead] = await Promise.all([
           cdr.hangup_cause ? db.collection("disposition").findOne({ disposition_uuid: cdr.hangup_cause }) : null,
+          cdr.lead_uuid ? db.collection("lead_management").findOne({ lead_management_uuid: cdr.lead_uuid }) : null,
         ]);
 
         const formatDuration = (seconds) => {
@@ -459,6 +460,7 @@ class WebhookManager {
               "LegC_conversation_duration": "",//need these field
               "transfer_queue_name": "",//need these field
               "lead_uuid": cdr.lead_uuid || "",
+              "custom_fields": lead?.custom_fields || {},
             }
           ]
         };
