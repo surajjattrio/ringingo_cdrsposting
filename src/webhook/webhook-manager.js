@@ -539,7 +539,7 @@ class WebhookManager {
         };
       }
       // Special case for Sampann Finance
-      if (cdr.tenant_uuid === "1f84dd0e-f557-4712-94a1-675d9b5e42e1"){
+      if (cdr.tenant_uuid === "2d224c2f-2c6d-4769-8f3b-a67e54db3b80"){
         const [user, lead, campaign, notes] = await Promise.all([
           cdr.user_uuid ? db.collection("user").findOne({ uuid: cdr.user_uuid }) : null,
           cdr.lead_uuid ? db.collection("lead_management").findOne({ lead_management_uuid: cdr.lead_uuid }) : null,
