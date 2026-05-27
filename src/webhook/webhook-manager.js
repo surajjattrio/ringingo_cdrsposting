@@ -10,6 +10,7 @@ import https from "https";
 import logger from "../logger.js";
 import { getDatabase } from "../database.js";
 import config from "../config.js";
+import { type } from "os";
 
 class WebhookManager {
   constructor() {
@@ -18,6 +19,57 @@ class WebhookManager {
       success: 0,
       failed: 0,
     };
+  }
+
+  /**
+   * Fetch webhook delivery delay for a specific tenant from database
+   * Queries the webhook document's delay field for tenant-wise configuration
+   * @param {string} tenantUuid - Tenant UUID
+   * @returns {Promise<number>} Delay in milliseconds (default if not found)
+   */
+  async getTenantWebhookDelay(tenantUuid) {
+    try {
+      if (!tenantUuid) {
+        logger.debug("[WEBHOOK] No tenant UUID provided, using default delay", {
+          defaultDelay: config.webhooks.delay,
+        });
+        return config.webhooks.delay;
+      }
+
+      const db = getDatabase();
+      const webhooksCollection = db.collection("web_hook");
+
+      // Fetch the first active webhook for this tenant to get tenant-specific delay
+      const tenantWebhook = await webhooksCollection.findOne({
+        tenant_uuid: tenantUuid,
+        is_active: true,
+        webhook_type: "cdr",
+      });
+
+      if (tenantWebhook && tenantWebhook.delay) {
+        logger.debug("[WEBHOOK] Using tenant-specific delay from webhook document", {
+          tenantUuid,
+          webhookUuid: tenantWebhook.uuid,
+          delay: tenantWebhook.delay,
+        });
+        return tenantWebhook.delay;
+      }
+
+      // Fallback to default delay if no tenant-specific delay found
+      logger.debug("[WEBHOOK] No tenant-specific delay found, using default", {
+        tenantUuid,
+        defaultDelay: config.webhooks.delay,
+      });
+      return config.webhooks.delay;
+
+    } catch (error) {
+      logger.warn("[WEBHOOK] Error fetching tenant webhook delay, using default", {
+        tenantUuid,
+        error: error.message,
+        defaultDelay: config.webhooks.delay,
+      });
+      return config.webhooks.delay;
+    }
   }
 
   /**
@@ -133,10 +185,15 @@ class WebhookManager {
         tenantUuid,
       });
 
-      // Apply delivery delay if configured
-      if (config.webhooks.delay && config.webhooks.delay > 0) {
-        logger.debug(`[WEBHOOK] Waiting for ${config.webhooks.delay}ms delay before processing...`);
-        await new Promise(resolve => setTimeout(resolve, config.webhooks.delay));
+      // Fetch tenant-specific webhook delay from database
+      const tenantDelay = await this.getTenantWebhookDelay(tenantUuid);
+      
+      if (tenantDelay && tenantDelay > 0) {
+        logger.debug(`[WEBHOOK] Waiting for ${tenantDelay}ms delay before processing (tenant-specific configuration)...`, {
+          tenantUuid,
+          delay: tenantDelay,
+        });
+        await new Promise(resolve => setTimeout(resolve, tenantDelay));
       }
 
       // Fetch fresh CDR data from database
