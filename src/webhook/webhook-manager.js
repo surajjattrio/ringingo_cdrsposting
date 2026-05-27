@@ -655,7 +655,69 @@ class WebhookManager {
           "Comment": notes?.comment || "-",
           "Recording": cdr.recording_path ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path : "-"
         };
-      } 
+      }
+      
+      // Special case for Shipeaso
+      if (cdr.tenant_uuid === "cbe2814f-0f5e-46ec-8f9c-256acd07190b"){
+        const [user, lead, campaign, notes] = await Promise.all([
+          cdr.user_uuid ? db.collection("user").findOne({ uuid: cdr.user_uuid }) : null,
+          cdr.lead_uuid ? db.collection("lead_management").findOne({ lead_management_uuid: cdr.lead_uuid }) : null,
+          cdr.campaign_uuid ? db.collection("blended_campaign").findOne({ uuid: cdr.campaign_uuid }) || 
+                              db.collection("inbound_campaign").findOne({ uuid: cdr.campaign_uuid }) ||
+                              db.collection("outbound_campaign").findOne({ uuid: cdr.campaign_uuid }) : null,
+          cdr.custom_callid ? db.collection("notes").findOne({ cdrs_uuid: cdr.custom_callid }) : null
+        ]);
+
+        let disposition = "-";
+        let subDisposition = "-";
+        
+        if (cdr.hangup_cause && cdr.hangup_cause !== "") {
+          try {
+            const path = [];
+            let currentUuid = cdr.hangup_cause;
+            
+            for (let i = 0; i < 3; i++) {
+              const disp = await db.collection("disposition").findOne({ disposition_uuid: currentUuid });
+              if (!disp) break;
+              path.unshift(disp.name);
+              if (!disp.parent_disposition || disp.parent_disposition === "") break;
+              currentUuid = disp.parent_disposition;
+            }
+
+            if (path.length > 0) {
+              disposition = path[0] || "-";
+              subDisposition = path[1] || "-";
+            }
+          } catch (e) {
+            logger.warn("[WEBHOOK] Disposition hierarchy lookup failed for Shipeaso", { 
+              error: e.message, 
+              hangup_cause: cdr.hangup_cause 
+            });
+          }
+        }
+
+        return {
+          call_uuid: cdr.uuid || "-",
+          DialerDate: this.convertUtcToIst(cdr.callstart)?.split(" ")[0] || "-",
+          dialerDisposition: disposition,
+          dialerDispositionCode: "-",
+          dialerSubdisposition: subDisposition,
+          dialerRemark: notes?.comment || "-",
+          dialerAgentID: cdr.user_uuid || "-",
+          dialerAgentName: user?.fullname || user?.username || "-",
+          dialerCampaignName: campaign?.name || "-",
+          DialerLeadName: lead?.lead_name || "-",
+          dialerLeadID: cdr.lead_uuid || "-",
+          dialerCallStatus: cdr.disposition || "-",
+          recordingURL: cdr.recording_path ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path : "-",
+          agent_id: cdr.user_uuid || "-",
+          waiting_time: cdr.waiting_time || 0,
+          total_duration: cdr.total_duration || 0,
+          time: cdr.createdAt || new Date().toISOString(),
+          ringing_time: cdr.ringing_time || 0,
+          custom_fields: lead?.custom_fields || {}
+        };
+      }
 
     const [user, tenant] = await Promise.all([
       cdr.user_uuid ? db.collection("user").findOne({ uuid: cdr.user_uuid }) : null,
