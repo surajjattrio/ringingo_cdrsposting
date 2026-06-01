@@ -489,8 +489,8 @@ class WebhookManager {
                 : "Not Connected"
               : "Not Connected";
         return {
-          "Incoming Webhook Payload": [
-            {
+          // "Incoming Webhook Payload": [
+          //   {
               "call_date": datePart,
               "call_time": timePart,
               "customer_status": hangupCause?.name || "",
@@ -519,8 +519,8 @@ class WebhookManager {
               "lead_uuid": cdr.lead_uuid || "",
               "custom_fields": lead?.custom_fields || {},
             }
-          ]
-        };
+        //   ]
+        // };
       }
 
       // Special case for convoz - V-Xpress NMC and percorner
