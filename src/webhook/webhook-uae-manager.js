@@ -388,7 +388,7 @@ class UAEWebhookManager {
                         cdr.disconnected_by || "-",
               campaignId: cdr.campaign_uuid || "-",
               customerName: cdr.caller_id_name || cdr.destination_number || "-",
-              recordingUrl: cdr.recording_path ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path : "",
+              recordingUrl: cdr.recording_path ? "https://ccdubai2api.ringingo.com/recordings/download/recording?recording=" + cdr.recording_path : "",
               companyId: cdr.tenant_uuid || "-"
             }
           ]
@@ -407,7 +407,7 @@ class UAEWebhookManager {
       agent_id: cdr.user_uuid,
       agent_name: user?.fullname || user?.username,
       recording_file: cdr.recording_path
-        ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path
+        ? "https://ccdubai2api.ringingo.com/recordings/download/recording?recording=" + cdr.recording_path
         : undefined,
       team_id: undefined,
       team_name: undefined,
