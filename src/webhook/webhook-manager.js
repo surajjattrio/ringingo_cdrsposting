@@ -523,9 +523,9 @@ class WebhookManager {
         // };
       }
 
-      // Special case for convoz - V-Xpress NMC and percorner
-      if ((cdr.tenant_uuid === "1f84dd0e-f557-4712-94a1-675d9b5e42e1" || cdr.tenant_uuid === "cf98c767-2404-484e-888b-e53897315d5a") && 
-          (webhookUuid === "e5d92ded-4ade-4ca3-97df-7ac7edd9d91a" || webhookUuid === "6a6da557-4747-4d4b-b39f-5948e65b726e")) {
+      // Special case for convoz - V-Xpress NMC, 1finance and percorner
+      if ((cdr.tenant_uuid === "1f84dd0e-f557-4712-94a1-675d9b5e42e1" || cdr.tenant_uuid === "cf98c767-2404-484e-888b-e53897315d5a") || cdr.tenant_uuid === "c1794f5d-8cf3-4e3e-972c-eba0262bef40" && 
+          (webhookUuid === "e5d92ded-4ade-4ca3-97df-7ac7edd9d91a" || webhookUuid === "6a6da557-4747-4d4b-b39f-5948e65b726e" || webhookUuid === "e63cfaeb-c199-4bf2-899b-8deb78baaf7d")) {
         const [user, note, campaignInbound, campaignOutbound, campaignBlended] = await Promise.all([
           cdr.user_uuid ? db.collection("user").findOne({ uuid: cdr.user_uuid }) : null,
           cdr.custom_callid ? db.collection("notes").findOne({ cdrs_uuid: cdr.custom_callid }) : null,
