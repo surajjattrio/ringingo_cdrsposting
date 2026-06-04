@@ -1,2 +1,2 @@
 @Library('jenkins-library') _
-ttbstritechnetworkfreeswitchDistributedArc(true,8735,"",1,false)
+ttbsRabbitMQCDRNode(true,8736,"",1,false)
