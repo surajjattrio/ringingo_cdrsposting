@@ -27,6 +27,7 @@ import { wrapCollectionsWithQueue } from "./mongodb-queue-wrapper.js";
 import webhookRoutes from "./webhook/webhook-routes.js";
 import uaeWebhookRoutes from "./webhook/webhook-uae-routes.js";
 import googleDriveRoutes from "./googledrive/google-drive-routes.js";
+import healthRoutes from "./health-routes.js";
 import googleDriveUploader from "./googledrive/google-drive-uploader.js";
 import googleDriveSettingsManager from "./googledrive/google-drive-settings-manager.js";
 
@@ -48,6 +49,7 @@ app.use(
 app.use("/api", webhookRoutes);
 app.use("/api", uaeWebhookRoutes);
 app.use("/api", googleDriveRoutes);
+app.use("/api", healthRoutes);
 
 /**
  * Helper function to check if string starts with number
