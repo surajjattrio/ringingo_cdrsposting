@@ -159,7 +159,7 @@ function _mapCollections(database) {
         voiceBroadcast: database.collection('voice_broadcast'),
         agentLiveReport: database.collection('agent_live_report'),
         ipMap: database.collection('ip_map'),
-        voiceBroadcastDetails: database.collection('voice_broadcast_details'),
+        voiceBroadcastDetails: database.collection('voicebroadcast_details'),
         webhook_delivery_logs: database.collection('webhook_delivery_logs'),
         notes: database.collection('notes'),
     };

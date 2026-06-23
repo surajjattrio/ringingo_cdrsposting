@@ -79,6 +79,81 @@ router.post('/external/webhook-only', async (req, res) => {
 });
 
 /**
+ * POST /api/external/vb-webhook
+ * Called by cdrs_posting.py after writing voicebroadcast_details to MongoDB.
+ * Delivers voice broadcast call data to all active webhooks for the tenant
+ * with webhook_type = "voice_broadcast".
+ */
+router.post('/external/vb-webhook', async (req, res) => {
+    try {
+        const data = req.body;
+
+        if (!data || Object.keys(data).length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Body data is required and cannot be empty',
+            });
+        }
+
+        const vbUuid = data.uuid;
+        const tenantUuid = data.tenant_uuid;
+
+        if (!tenantUuid) {
+            return res.status(400).json({
+                success: false,
+                error: 'tenant_uuid is required',
+            });
+        }
+
+        logger.info('[VB_WEBHOOK] Received voice broadcast webhook request', {
+            vbUuid,
+            tenantUuid,
+            type: data.type,
+        });
+
+        const webhookTask = {
+            type: 'vb_webhook_delivery',
+            vbUuid,
+            tenantUuid,
+            timestamp: new Date().toISOString(),
+            messageId: `vb_webhook_${vbUuid}_${Date.now()}`,
+        };
+
+        await rabbitMQ.publish(
+            webhookTask,
+            {
+                expiration: config.webhooks.delay?.toString() || "60000",
+                type: 'vb_webhook_delivery_task',
+            },
+            config.webhooks.queue
+        );
+
+        logger.info('[VB_WEBHOOK] Voice broadcast webhook task queued', {
+            vbUuid,
+            messageId: webhookTask.messageId,
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: 'Voice broadcast webhook delivery queued',
+            messageId: webhookTask.messageId,
+            vbUuid,
+        });
+
+    } catch (error) {
+        logger.error('[VB_WEBHOOK] Failed to process voice broadcast webhook', {
+            error: error.message,
+            stack: error.stack,
+        });
+        return res.status(500).json({
+            success: false,
+            error: 'Internal error while delivering voice broadcast webhook',
+            message: error.message,
+        });
+    }
+});
+
+/**
  * GET /api/webhooks
  * Get all webhooks
  */
