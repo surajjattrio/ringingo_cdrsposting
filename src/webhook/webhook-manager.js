@@ -113,6 +113,138 @@ class WebhookManager {
   }
 
   /**
+   * Deliver voice broadcast data to all active webhooks for a tenant
+   * Webhooks must have webhook_type = "voice_broadcast" to receive these events.
+   * @param {Object} vbData - voicebroadcast_details document
+   * @param {string} tenantUuid - Tenant UUID
+   */
+  async deliverVBData(vbData, tenantUuid = null) {
+    try {
+      const db = getDatabase();
+      const webhooksCollection = db.collection("web_hook");
+
+      const filter = {
+        is_active: true,
+        webhook_type: "voice_broadcast",
+      };
+
+      if (tenantUuid) {
+        filter.tenant_uuid = tenantUuid;
+      }
+
+      const webhooks = await webhooksCollection.find(filter).toArray();
+
+      if (webhooks.length === 0) {
+        logger.debug("[VB_WEBHOOK] No active voice_broadcast webhooks found", { tenantUuid });
+        return;
+      }
+
+      logger.info("[VB_WEBHOOK] Delivering to webhooks", {
+        vbUuid: vbData.uuid,
+        webhookCount: webhooks.length,
+        tenantUuid,
+      });
+
+      // Enrich the raw VB document with lead, broadcast, disposition info
+      const enrichedPayload = await this.transformVBData(vbData);
+
+      const deliveryPromises = webhooks.map((webhook) => {
+        const webhookConfig = {
+          uuid: webhook.uuid,
+          url: (webhook.webhook_url || "").trim(),
+          method: webhook.method || "POST",
+          headers: webhook.headers || {},
+          timeout: webhook.timeout || 30000,
+          retries: webhook.max_retries || 3,
+          retryDelay: webhook.retry_delay || 2000,
+          tenantUuid: webhook.tenant_uuid,
+          name: webhook.name || "VB Webhook",
+          bearerToken: webhook.bearer_token || null,
+        };
+        return this._httpDeliverWithRetry(webhookConfig, enrichedPayload, 'voice_broadcast');
+      });
+
+      await Promise.allSettled(deliveryPromises);
+    } catch (error) {
+      logger.error("[VB_WEBHOOK] Delivery failed", {
+        error: error.message,
+        tenantUuid,
+      });
+    }
+  }
+
+  /**
+   * Transform raw voicebroadcast_details document into a full webhook payload.
+   * Enriches with lead name, broadcast name, disposition name, and tenant name
+   * so the receiving end has all UI-visible fields in one payload.
+   * @param {Object} vbData - Raw voicebroadcast_details document from MongoDB
+   * @returns {Object} Enriched payload
+   */
+  async transformVBData(vbData) {
+    try {
+      const db = getDatabase();
+
+      const [lead, broadcast, disposition, tenant] = await Promise.all([
+        vbData.lead_uuid
+          ? db.collection("lead_management").findOne({ lead_management_uuid: vbData.lead_uuid })
+          : null,
+        vbData.voicebroadcast_uuid
+          ? db.collection("voice_broadcast").findOne({ uuid: vbData.voicebroadcast_uuid })
+          : null,
+        vbData.hangup_cause
+          ? db.collection("disposition").findOne({ disposition_uuid: vbData.hangup_cause })
+          : null,
+        vbData.tenant_uuid
+          ? db.collection("tenant").findOne({ uuid: vbData.tenant_uuid })
+          : null,
+      ]);
+
+      const typeLabels = {
+        "0": "Survey",
+        "1": "IVR",
+        "2": "Not Interested",
+        "3": "DNC",
+        "":  "No Answer",
+      };
+
+      const formatDuration = (seconds) => {
+        const s = parseInt(seconds) || 0;
+        const h = Math.floor(s / 3600).toString().padStart(2, "0");
+        const m = Math.floor((s % 3600) / 60).toString().padStart(2, "0");
+        const sec = Math.floor(s % 60).toString().padStart(2, "0");
+        return `${h}:${m}:${sec}`;
+      };
+
+      return {
+        date:               this.convertUtcToIst(vbData.callstart),
+        caller_id_number:   vbData.caller_id_number,
+        caller_id_name:     vbData.caller_id_name || "",
+        destination_number: vbData.destination_number,
+        voice_broadcast:    broadcast?.name || "",
+        duration:           formatDuration(vbData.total_duration),
+        ringing_time:       formatDuration(vbData.ringing_time),
+        answer_time:        formatDuration(vbData.billsecond),
+        DTMF:               vbData.DTMF || "",
+        disposition:        disposition?.name || "",
+        lead:               lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "",
+        lead_custom_fields: lead?.custom_fields || {},
+        type:               typeLabels[vbData.type] ?? "Unknown",
+        survey_info:        vbData.survey_info || "",
+        ivr_feedback_score: vbData.ivr_feedback_score || "",
+        recording_path:     vbData.recording_path
+                              ? (config.webhooks.recordingBaseUrl || "") + vbData.recording_path
+                              : "",
+      };
+    } catch (error) {
+      logger.error("[VB_WEBHOOK] Transform failed, sending raw data", {
+        error: error.message,
+        vbUuid: vbData.uuid,
+      });
+      return vbData;
+    }
+  }
+
+  /**
    * Deliver CDR to all active webhooks for a tenant
    * @param {Object} cdr - CDR data to send
    * @param {string} tenantUuid - Tenant filter
@@ -176,6 +308,24 @@ class WebhookManager {
    * @param {Object} task - { cdrUuid, collectionName, tenantUuid }
    */
   async processWebhookTask(task) {
+    if (task.type === 'vb_webhook_delivery') {
+      const { vbUuid, tenantUuid } = task;
+      try {
+        logger.info('[VB_WEBHOOK] Processing VB task from queue', { vbUuid, tenantUuid });
+        const db = getDatabase();
+        const vbData = await db.collection('voicebroadcast_details').findOne({ uuid: vbUuid });
+        if (!vbData) {
+          logger.warn('[VB_WEBHOOK] VB record not found, skipping', { vbUuid });
+          return;
+        }
+        await this.deliverVBData(vbData, tenantUuid);
+      } catch (error) {
+        logger.error('[VB_WEBHOOK] Queue task processing failed', { error: error.message, vbUuid });
+        throw error;
+      }
+      return;
+    }
+
     const { cdrUuid, collectionName, tenantUuid } = task;
 
     try {
@@ -225,11 +375,13 @@ class WebhookManager {
   }
 
   /**
-   * Deliver CDR to a specific webhook with retry logic
+   * HTTP delivery with retry logic — sends an already-transformed payload.
+   * Used by both deliverToWebhook (CDR) and deliverVBData (VB) so each can
+   * apply its own transformation before handing off to this shared sender.
    * @param {Object} webhook - Webhook configuration
-   * @param {Object} cdr - CDR data
+   * @param {Object} transformedData - Pre-transformed payload ready to send
    */
-  async deliverToWebhook(webhook, cdr) {
+  async _httpDeliverWithRetry(webhook, transformedData, webhookType = 'cdr') {
     const startTime = Date.now();
     let lastError = null;
     let lastErrorDetails = null;
@@ -242,11 +394,9 @@ class WebhookManager {
           webhookUrl: webhook.url,
           attempt,
           maxRetries: webhook.retries,
-          cdrUuid: cdr.uuid,
+          payloadUuid: transformedData.uuid,
+          webhookType,
         });
-
-        // Transform CDR to client format for delivery
-        const transformedData = await this.transformCDR(cdr, webhook.uuid);
 
         // Prepare headers
         const headers = {
@@ -271,13 +421,11 @@ class WebhookManager {
           url: webhook.url,
           method: webhook.method,
           headers: loggedHeaders,
-          rawCdr: {
-            uuid: cdr.uuid,
-            recording_path: cdr.recording_path,
-            user_uuid: cdr.user_uuid,
-            tenant_uuid: cdr.tenant_uuid
+          payload: {
+            uuid: transformedData.uuid,
+            tenant_uuid: transformedData.tenant_uuid,
           },
-          transformedData: transformedData
+          transformedData: transformedData,
         });
 
         // Generate equivalent curl command for manual testing
@@ -286,7 +434,7 @@ class WebhookManager {
           .join(" ");
         const curlPayload = JSON.stringify(transformedData);
         const curlCommand = `curl -X ${webhook.method} '${webhook.url}' ${curlHeaders} -d '${curlPayload}'`;
-        
+
         logger.info("[WEBHOOK_CURL] Copy and test manually:", { curlCommand });
 
         const response = await axios({
@@ -309,7 +457,8 @@ class WebhookManager {
           webhookName: webhook.name,
           webhookUuid: webhook.uuid,
           webhookUrl: webhook.url,
-          cdrUuid: cdr.uuid,
+          payloadUuid: transformedData.uuid,
+          webhookType,
           statusCode: response.status,
           durationMs: duration,
           attempt,
@@ -322,11 +471,13 @@ class WebhookManager {
         await this.logWebhookDelivery({
           webhookUuid: webhook.uuid,
           webhookName: webhook.name,
-          cdrUuid: cdr.uuid,
+          payloadUuid: transformedData.uuid,
+          webhook_type: webhookType,
           status: "success",
           statusCode: response.status,
           statusText: response.statusText,
           responseData: response.data,
+          payload: transformedData,
           attempt,
           duration,
         });
@@ -361,7 +512,8 @@ class WebhookManager {
         logger.warn("[WEBHOOK] Delivery attempt failed", {
           webhookName: webhook.name,
           webhookUuid: webhook.uuid,
-          cdrUuid: cdr.uuid,
+          payloadUuid: transformedData.uuid,
+          webhookType,
           attempt,
           maxRetries: webhook.retries,
           error: lastErrorDetails,
@@ -390,7 +542,8 @@ class WebhookManager {
       await this.logWebhookDelivery({
         webhookUuid: webhook.uuid,
         webhookName: webhook.name,
-        cdrUuid: cdr.uuid,
+        payloadUuid: transformedData.uuid,
+        webhook_type: webhookType,
         status: "failed",
         statusCode: lastError.response?.status || 0,
         attempt: webhook.retries,
@@ -400,6 +553,7 @@ class WebhookManager {
         errorType: lastError.name,
         statusText: lastError.response?.statusText,
         responseData: lastError.response?.data,
+        payload: transformedData,
       });
       
       console.log("✅ [WEBHOOK] Failure logged to database");
@@ -415,6 +569,16 @@ class WebhookManager {
       statusText: lastError.response?.statusText,
       durationMs: duration
     };
+  }
+
+  /**
+   * Deliver CDR to a specific webhook — transforms CDR first, then sends.
+   * @param {Object} webhook - Webhook configuration
+   * @param {Object} cdr - Raw CDR data (will be transformed via transformCDR)
+   */
+  async deliverToWebhook(webhook, cdr) {
+    const transformedData = await this.transformCDR(cdr, webhook.uuid);
+    return this._httpDeliverWithRetry(webhook, transformedData, 'cdr');
   }
 
   /**
