@@ -689,7 +689,7 @@ class WebhookManager {
 
         return {
           "Start Date": this.convertUtcToIst(cdr.callstart) || "-",
-          "End Date": this.convertUtcToIst(cdr.callend) || "-",
+          "End Date": cdr.callend || "-",
           "Caller ID Number": cdr.caller_id_number || "-",
           "DID / Phone Number": cdr.destination_number || "-",
           "User ID": cdr.sip_user || cdr.user_uuid || "-",
