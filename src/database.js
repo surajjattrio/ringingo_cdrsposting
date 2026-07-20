@@ -44,6 +44,9 @@ async function connectMongoDB() {
             database: config.mongodb.database,
             url: config.mongodb.url.replace(/\/\/([^:]+):([^@]+)@/, '//***:***@')
         });
+
+        await ensureIndexes(db);
+
         return db;
 
     } catch (error) {
@@ -52,6 +55,24 @@ async function connectMongoDB() {
             stack: error.stack
         });
         throw error;
+    }
+}
+
+/**
+ * Ensure required indexes exist. createIndex is idempotent (a no-op if the index
+ * already exists with the same spec), so this is safe to run on every connect.
+ */
+async function ensureIndexes(database) {
+    try {
+        // Supports the tenant-scoped, createdAt-sorted paginated query behind
+        // GET /api/webhook-logs (webhook_delivery_logs.find({ tenant_uuid }).sort({ createdAt: -1 })).
+        await database.collection('webhook_delivery_logs').createIndex(
+            { tenant_uuid: 1, createdAt: -1 }
+        );
+    } catch (error) {
+        logger.error('[MONGODB] Failed to ensure indexes', {
+            error: error.message
+        });
     }
 }
 

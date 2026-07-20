@@ -155,31 +155,59 @@ router.post('/external/vb-webhook', async (req, res) => {
 
 /**
  * GET /api/webhooks
- * Get all webhooks
+ * Get all webhooks — ALWAYS scoped to a tenant, same reasoning as /webhook-logs:
+ * the tenant boundary is enforced here, not just at the proxying API layer, so this
+ * endpoint can never be called unfiltered and leak another tenant's webhook configs.
  */
 router.get('/webhooks', async (req, res) => {
     try {
         const db = getDatabase();
         const webhooksCollection = db.collection('web_hook');
-        
-        const { tenant_uuid, tenant_id, is_active, webhook_type } = req.query;
-        
-        const filter = {};
-        // Support both tenant_uuid (preferred) and tenant_id (fallback)
-        if (tenant_uuid) filter.tenant_uuid = tenant_uuid;
-        else if (tenant_id) filter.tenant_uuid = tenant_id;
-        
+
+        const {
+            tenant_uuid,
+            tenant_id,
+            is_active,
+            webhook_type,
+            name,
+            transform_strategy,
+            method,
+        } = req.query;
+
+        // Support both tenant_uuid (preferred) and tenant_id (fallback) — but one of
+        // them is required. filter.tenant_uuid is set first and never reassigned
+        // below, so every optional filter after it can only narrow within this
+        // tenant's own webhooks, never widen across tenants.
+        const resolvedTenantUuid = tenant_uuid || tenant_id;
+        if (!resolvedTenantUuid) {
+            return res.status(400).json({
+                success: false,
+                error: 'tenant_uuid is required',
+            });
+        }
+
+        const filter = { tenant_uuid: resolvedTenantUuid };
+
         if (is_active !== undefined) filter.is_active = is_active === 'true';
         if (webhook_type) filter.webhook_type = webhook_type;
-        
+        if (transform_strategy) filter.transform_strategy = transform_strategy;
+        if (method) filter.method = method;
+
+        if (name) {
+            // Case-insensitive contains match. Escape regex metacharacters in the raw
+            // user input so it's treated as a literal substring, not a regex pattern.
+            const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            filter.name = { $regex: escapedName, $options: 'i' };
+        }
+
         const webhooks = await webhooksCollection.find(filter).toArray();
-        
+
         res.json({
             success: true,
             count: webhooks.length,
             data: webhooks,
         });
-        
+
     } catch (error) {
         logger.error('[WEBHOOK_API] Failed to fetch webhooks', {
             error: error.message,
@@ -256,8 +284,21 @@ router.post('/webhooks', async (req, res) => {
             tenant_uuid,
             tenant_id, // Fallback support
             bearer_token = null,
+            transform_strategy = "legacy",
+            transform_template = null,
+            wrapInJson = false,
+            wrapperKey = null,
+            wrapperType = "object",
+            // Delivery post-delay (ms) — how long to wait after the CDR is written
+            // before posting THIS webhook, so late-set fields (disposition, comment)
+            // set by the agent after hangup are captured. Applied per-webhook inside
+            // WebhookManager#deliverCDR (each active webhook waits its own delay and
+            // re-fetches the CDR fresh afterward), not shared across a tenant's other
+            // webhooks.
+            delay = 120000,
+            stripEmpty = false,
         } = req.body;
-        
+
         // Validation
         if (!name || !webhook_url) {
             return res.status(400).json({
@@ -295,6 +336,16 @@ router.post('/webhooks', async (req, res) => {
             is_active,
             tenant_uuid: tenant_uuid || tenant_id || null, // Prefer tenant_uuid
             bearer_token,
+            transform_strategy,
+            transform_template,
+            wrapInJson: !!wrapInJson,
+            wrapperKey: wrapperKey || null,
+            wrapperType: wrapperType || "object",
+            // Stored as a Number regardless of what's sent — some existing documents
+            // have this as a string (e.g. "120000"), which still works with setTimeout
+            // (implicit coercion) but is worth normalizing going forward.
+            delay: Number(delay) || 120000,
+            stripEmpty: !!stripEmpty,
             created_at: new Date(),
             updated_at: new Date(),
         };
@@ -349,8 +400,15 @@ router.put('/webhooks/:id', async (req, res) => {
             tenant_uuid,
             tenant_id, // Fallback support
             bearer_token,
+            transform_strategy,
+            transform_template,
+            wrapInJson,
+            wrapperKey,
+            wrapperType,
+            delay,
+            stripEmpty,
         } = req.body;
-        
+
         const updates = {};
         if (name !== undefined) updates.name = name;
         if (webhook_url !== undefined) {
@@ -375,7 +433,14 @@ router.put('/webhooks/:id', async (req, res) => {
         if (tenant_uuid !== undefined) updates.tenant_uuid = tenant_uuid;
         else if (tenant_id !== undefined) updates.tenant_uuid = tenant_id;
         if (bearer_token !== undefined) updates.bearer_token = bearer_token;
-        
+        if (transform_strategy !== undefined) updates.transform_strategy = transform_strategy;
+        if (transform_template !== undefined) updates.transform_template = transform_template;
+        if (wrapInJson !== undefined) updates.wrapInJson = !!wrapInJson;
+        if (wrapperKey !== undefined) updates.wrapperKey = wrapperKey || null;
+        if (wrapperType !== undefined) updates.wrapperType = wrapperType || "object";
+        if (delay !== undefined) updates.delay = Number(delay) || 120000;
+        if (stripEmpty !== undefined) updates.stripEmpty = !!stripEmpty;
+
         updates.updated_at = new Date();
         
         const db = getDatabase();
@@ -503,37 +568,72 @@ router.get('/webhooks-stats', async (req, res) => {
 
 /**
  * GET /api/webhook-logs
- * Get webhook delivery logs
+ * Get webhook delivery logs — ALWAYS scoped to a tenant. The tenant boundary is
+ * enforced here, not just at the proxying API layer, so this endpoint can never
+ * be called unfiltered and leak another tenant's delivery logs.
  */
 router.get('/webhook-logs', async (req, res) => {
     try {
         const db = getDatabase();
         const logsCollection = db.collection('webhook_delivery_logs');
-        
-        const { webhook_id, webhook_uuid, status, limit = 100, skip = 0 } = req.query;
-        
-        const filter = {};
+
+        const {
+            webhook_id,
+            webhook_uuid,
+            status,
+            webhook_type,
+            status_code,
+            from_date,
+            to_date,
+            tenant_uuid,
+            limit = 100,
+            skip = 0,
+        } = req.query;
+
+        if (!tenant_uuid) {
+            return res.status(400).json({
+                success: false,
+                error: 'tenant_uuid is required',
+            });
+        }
+
+        // tenant_uuid is set first and never reassigned below — every optional filter
+        // below is ANDed on top of it, narrowing within the tenant's own logs only.
+        // It can never be widened or overridden by any other query param.
+        const filter = { tenant_uuid };
         if (webhook_uuid) filter.webhookUuid = webhook_uuid;
         else if (webhook_id) filter.webhookId = webhook_id;
-        
+
         if (status) filter.status = status;
-        
+        if (webhook_type) filter.webhook_type = webhook_type;
+
+        if (status_code) {
+            const parsedStatusCode = parseInt(status_code, 10);
+            if (!isNaN(parsedStatusCode)) filter.statusCode = parsedStatusCode;
+        }
+
+        if (from_date || to_date) {
+            filter.createdAt = {};
+            if (from_date) filter.createdAt.$gte = new Date(from_date);
+            if (to_date) filter.createdAt.$lte = new Date(to_date);
+        }
+
         const logs = await logsCollection
             .find(filter)
-            .sort({ timestamp: -1 })
+            .sort({ createdAt: -1 })
             .skip(parseInt(skip))
             .limit(parseInt(limit))
             .toArray();
-        
+
         const total = await logsCollection.countDocuments(filter);
-        
+
         res.json({
             success: true,
             count: logs.length,
             total,
             data: logs,
         });
-        
+
     } catch (error) {
         logger.error('[WEBHOOK_API] Failed to fetch webhook logs', {
             error: error.message,
