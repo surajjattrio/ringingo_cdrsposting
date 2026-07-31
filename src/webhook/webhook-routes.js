@@ -28,6 +28,19 @@ router.post('/external/webhook-only', async (req, res) => {
                 error: 'Body data is required and cannot be empty',
             });
         }
+        if(!data.uuid) {
+            return res.status(400).json({
+                success: false,
+                error: 'cdr uuid is required in the payload',
+            });
+        }
+
+        if(!data.tenant_uuid) {
+            return res.status(400).json({
+                success: false,
+                error: 'tenant_uuid is required in the payload',
+            });
+        }
 
         // Use uuid from data
         const cdrUuid = data.uuid
