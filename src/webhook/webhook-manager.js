@@ -116,6 +116,22 @@ class WebhookManager {
   }
 
   /**
+   * Builds the recording URL sent in webhook payloads. Recordings are now uploaded
+   * directly to S3/Spaces, so recording_path is already a full public URL in that
+   * case — prefixing it with recordingBaseUrl (the backend's own download route)
+   * would double-wrap it into a broken link. Only bare/relative paths (the older
+   * local-storage layout) still need that prefix.
+   * @param {string} recordingPath
+   * @param {*} fallback - returned as-is when recordingPath is falsy
+   */
+  buildRecordingUrl(recordingPath, fallback = "") {
+    if (!recordingPath) return fallback;
+    return /^https?:\/\//i.test(recordingPath)
+      ? recordingPath
+      : (config.webhooks.recordingBaseUrl || "") + recordingPath;
+  }
+
+  /**
    * Deliver voice broadcast data to all active webhooks for a tenant
    * Webhooks must have webhook_type = "voice_broadcast" to receive these events.
    * @param {Object} vbData - voicebroadcast_details document
@@ -234,9 +250,7 @@ class WebhookManager {
         type:               typeLabels[vbData.type] ?? "Unknown",
         survey_info:        vbData.survey_info || "",
         ivr_feedback_score: vbData.ivr_feedback_score || "",
-        recording_path:     vbData.recording_path
-                              ? (config.webhooks.recordingBaseUrl || "") + vbData.recording_path
-                              : "",
+        recording_path:     this.buildRecordingUrl(vbData.recording_path),
       };
     } catch (error) {
       logger.error("[VB_WEBHOOK] Transform failed, sending raw data", {
@@ -999,14 +1013,14 @@ class WebhookManager {
       // createdAt is a genuine BSON Date (UTC-at-rest, unambiguous); convertUtcToIst
       // now accepts Date instances directly (see above) so this converts correctly.
       created_at_ist: this.convertUtcToIst(cdr.createdAt),
-      recording_url: cdr.recording_path
-        ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path
-        : "",
+      recording_url: this.buildRecordingUrl(cdr.recording_path),
       total_duration_formatted: formatDuration(cdr.total_duration),
       billsecond_formatted: formatDuration(cdr.billsecond),
       ringing_time_formatted: formatDuration(cdr.ringing_time),
       waiting_time_formatted: formatDuration(cdr.waiting_time),
       hold_time_formatted: formatDuration(cdr.hold_time),
+      acw_time_formatted: formatDuration(cdr.acw_time),
+      actual_talktime_formatted: formatDuration(actualTalktimeVyapar),
       // "" (not null) so template placeholders always resolve to a string. Vyapar's own
       // hardcoded transformCDR branch still returns null natively and is unaffected by this;
       // use hangup_by_raw below when a UI template needs the raw-code fallback instead of "".
@@ -1234,7 +1248,7 @@ class WebhookManager {
               "start_time": callstart, // actualy time when agent pick the call
               "end_time": callend,
               "hangup_by": cdr.disconnected_by === "0" ? "Agent" : (cdr.disconnected_by === "1" ? "Customer" : (cdr.disconnected_by === "2" ? "System" : null)),
-              "recording_url": cdr.recording_path ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path : "",
+              "recording_url": this.buildRecordingUrl(cdr.recording_path),
               "knowlarity_number": agent_number,
               "queue_id": cdr.pbx_feature === "call_queue" ? (cdr.pbx_feature_uuid || "") : "",
               "LegC_agent_number": "",//need these field
@@ -1312,7 +1326,7 @@ class WebhookManager {
               campaignId: cdr.campaign_uuid || "-",
               campaignName: campaign?.name || "-",
               customerName: "-",
-              recordingUrl: cdr.recording_path ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path : "",
+              recordingUrl: this.buildRecordingUrl(cdr.recording_path),
               companyId: cdr.tenant_uuid || "-",
               campaignMobile: cdr.destination_number || "-"
             }
@@ -1434,7 +1448,7 @@ class WebhookManager {
           "Sub Disposition 2": subDisposition2,
           "Direction": cdr.direction ? (cdr.direction === "inbound" ? "Inbound" : "Outbound") : "-",
           "Comment": notes?.comment || "-",
-          "Recording": cdr.recording_path ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path : "-"
+          "Recording": this.buildRecordingUrl(cdr.recording_path, "-")
         };
       }
       
@@ -1490,7 +1504,7 @@ class WebhookManager {
           DialerLeadName: lead?.lead_name || "-",
           dialerLeadID: cdr.lead_uuid || "-",
           dialerCallStatus: cdr.disposition || "-",
-          recordingURL: cdr.recording_path ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path : "-",
+          recordingURL: this.buildRecordingUrl(cdr.recording_path, "-"),
           agent_id: cdr.user_uuid || "-",
           waiting_time: cdr.waiting_time || 0,
           total_duration: cdr.total_duration || 0,
@@ -1511,9 +1525,7 @@ class WebhookManager {
       call_status: cdr.disposition,
       agent_id: cdr.user_uuid,
       agent_name: user?.fullname || user?.username,
-      recording_file: cdr.recording_path
-        ? (config.webhooks.recordingBaseUrl || "") + cdr.recording_path
-        : undefined,
+      recording_file: this.buildRecordingUrl(cdr.recording_path, undefined),
       team_id: undefined,
       team_name: undefined,
       client_id: cdr.tenant_uuid,

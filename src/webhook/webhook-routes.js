@@ -299,6 +299,7 @@ router.post('/webhooks', async (req, res) => {
             bearer_token = null,
             transform_strategy = "legacy",
             transform_template = null,
+            mapping_mode = "custom",
             wrapInJson = false,
             wrapperKey = null,
             wrapperType = "object",
@@ -351,13 +352,17 @@ router.post('/webhooks', async (req, res) => {
             bearer_token,
             transform_strategy,
             transform_template,
+            mapping_mode: mapping_mode === "default" ? "default" : "custom",
             wrapInJson: !!wrapInJson,
             wrapperKey: wrapperKey || null,
             wrapperType: wrapperType || "object",
             // Stored as a Number regardless of what's sent — some existing documents
             // have this as a string (e.g. "120000"), which still works with setTimeout
             // (implicit coercion) but is worth normalizing going forward.
-            delay: Number(delay) || 120000,
+            // `|| 120000` would silently turn a genuine 0 (deliver immediately) into
+            // 120000 since 0 is falsy — Number.isFinite distinguishes "really 0" from
+            // "missing/non-numeric".
+            delay: Number.isFinite(Number(delay)) ? Number(delay) : 120000,
             stripEmpty: !!stripEmpty,
             created_at: new Date(),
             updated_at: new Date(),
@@ -415,6 +420,7 @@ router.put('/webhooks/:id', async (req, res) => {
             bearer_token,
             transform_strategy,
             transform_template,
+            mapping_mode,
             wrapInJson,
             wrapperKey,
             wrapperType,
@@ -448,10 +454,14 @@ router.put('/webhooks/:id', async (req, res) => {
         if (bearer_token !== undefined) updates.bearer_token = bearer_token;
         if (transform_strategy !== undefined) updates.transform_strategy = transform_strategy;
         if (transform_template !== undefined) updates.transform_template = transform_template;
+        if (mapping_mode !== undefined) updates.mapping_mode = mapping_mode === "default" ? "default" : "custom";
         if (wrapInJson !== undefined) updates.wrapInJson = !!wrapInJson;
         if (wrapperKey !== undefined) updates.wrapperKey = wrapperKey || null;
         if (wrapperType !== undefined) updates.wrapperType = wrapperType || "object";
-        if (delay !== undefined) updates.delay = Number(delay) || 120000;
+        if (delay !== undefined) {
+            const parsedDelay = Number(delay);
+            updates.delay = Number.isFinite(parsedDelay) ? parsedDelay : 120000;
+        }
         if (stripEmpty !== undefined) updates.stripEmpty = !!stripEmpty;
 
         updates.updated_at = new Date();
