@@ -311,6 +311,8 @@ router.post('/webhooks', async (req, res) => {
             // webhooks.
             delay = 120000,
             stripEmpty = false,
+            // Restricts delivery to CDRs whose campaign_uuid is in this list — see the
+            campaign_uuids = [],
         } = req.body;
 
         // Validation
@@ -364,6 +366,7 @@ router.post('/webhooks', async (req, res) => {
             // "missing/non-numeric".
             delay: Number.isFinite(Number(delay)) ? Number(delay) : 120000,
             stripEmpty: !!stripEmpty,
+            campaign_uuids: Array.isArray(campaign_uuids) ? campaign_uuids : [],
             created_at: new Date(),
             updated_at: new Date(),
         };
@@ -426,6 +429,7 @@ router.put('/webhooks/:id', async (req, res) => {
             wrapperType,
             delay,
             stripEmpty,
+            campaign_uuids,
         } = req.body;
 
         const updates = {};
@@ -463,6 +467,9 @@ router.put('/webhooks/:id', async (req, res) => {
             updates.delay = Number.isFinite(parsedDelay) ? parsedDelay : 120000;
         }
         if (stripEmpty !== undefined) updates.stripEmpty = !!stripEmpty;
+        if (campaign_uuids !== undefined) {
+            updates.campaign_uuids = Array.isArray(campaign_uuids) ? campaign_uuids : [];
+        }
 
         updates.updated_at = new Date();
         

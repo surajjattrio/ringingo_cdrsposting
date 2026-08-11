@@ -301,14 +301,51 @@ class WebhookManager {
         return;
       }
 
+      // campaign_uuid is set at call time and never changes afterward (unlike
+      // disposition/comment, which is why the full CDR is still re-fetched per
+      // webhook after its own delay below) — so campaign-mismatched webhooks can be
+      // dropped right now, before waiting out anyone's delay or fetching the full
+      // document for a delivery that was never going to happen. Only pay for the
+      // lookup when some webhook actually has campaign filtering configured.
+      const hasCampaignFilters = webhooks.some(
+        (webhook) => Array.isArray(webhook.campaign_uuids) && webhook.campaign_uuids.length > 0,
+      );
+
+      let matchingWebhooks = webhooks;
+      if (hasCampaignFilters) {
+        const cdrForCampaignCheck = await db
+          .collection(collectionName)
+          .findOne({ uuid: cdrUuid }, { projection: { campaign_uuid: 1 } });
+        const cdrCampaignUuid = cdrForCampaignCheck?.campaign_uuid;
+
+        matchingWebhooks = webhooks.filter((webhook) => {
+          if (!Array.isArray(webhook.campaign_uuids) || webhook.campaign_uuids.length === 0) {
+            return true;
+          }
+          const matches = webhook.campaign_uuids.includes(cdrCampaignUuid);
+          if (!matches) {
+            logger.debug("[WEBHOOK] Skipping delivery — CDR campaign not in webhook's configured campaigns", {
+              webhookUuid: webhook.uuid,
+              cdrCampaignUuid,
+            });
+          }
+          return matches;
+        });
+
+        if (matchingWebhooks.length === 0) {
+          logger.debug("[WEBHOOK] No webhooks match this CDR's campaign", { cdrUuid, tenantUuid });
+          return;
+        }
+      }
+
       logger.debug("[WEBHOOK] Delivering CDR to webhooks", {
         cdrUuid,
-        webhookCount: webhooks.length,
+        webhookCount: matchingWebhooks.length,
       });
 
       // Each webhook waits its own delay (in parallel — these run concurrently, not
       // serialized) then re-fetches the CDR fresh before transforming/delivering.
-      const deliveryPromises = webhooks.map(async (webhook) => {
+      const deliveryPromises = matchingWebhooks.map(async (webhook) => {
         const webhookDelay = Number(webhook.delay) || config.webhooks.delay;
 
         if (webhookDelay > 0) {
