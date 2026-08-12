@@ -903,6 +903,7 @@ class WebhookManager {
       campaignOutbound,
       campaignBlended,
       followUps,
+      extension,
     ] = await Promise.all([
       cdr.user_uuid
         ? db.collection("user").findOne({ uuid: cdr.user_uuid })
@@ -940,6 +941,9 @@ class WebhookManager {
             .find({ lead_management_uuid: cdr.lead_uuid })
             .toArray()
         : [],
+      cdr.extension_uuid
+        ? db.collection("extensions").findOne({ uuid: cdr.extension_uuid })
+        : null,
     ]);
 
     // (b) Dependent joins — user_group/lead_group need the user/lead resolved in (a);
@@ -1015,9 +1019,10 @@ class WebhookManager {
     } = await resolveDispositionHierarchy(cdr.hangup_cause);
 
     const dialMethodLabels = {
+      0: "Manual Dial",
       1: "Auto Dial",
-      2: "Manual Dial",
-      3: "Preview Dial",
+      2: "Preview Dial",
+      3: "Predictive Dial",
     };
     const disconnectedByLabels = { 0: "Agent", 1: "Customer", 2: "System" };
 
@@ -1054,6 +1059,11 @@ class WebhookManager {
       notes,
       campaign,
       agent_name: user?.fullname || user?.username || "",
+      agent_display_name:
+        user?.username && user?.fullname
+          ? `${user.username} - ${user.fullname}`
+          : user?.fullname || user?.username || "",
+      extension_username: extension?.username || "",
       campaign_name: campaign?.name || "",
       comment: notes?.comment || "",
       // Most recent reminder_date_time across the lead's follow_up records
@@ -1422,11 +1432,13 @@ class WebhookManager {
           return `${h}:${m}:${s}`;
         };
 
-        // Map dial method to readable format
+        // Map dial method to readable format — 0=Manual, 1=Auto, 2=Preview,
+        // 3=Predictive, 
         const dialMethodMap = {
+          "0": "Manual Dial",
           "1": "Auto Dial",
-          "2": "Manual Dial",
-          "3": "Preview Dial"
+          "2": "Preview Dial",
+          "3": "Predictive Dial"
         };
         const dialMethod = dialMethodMap[String(cdr.dial_method)] || "-";
 
