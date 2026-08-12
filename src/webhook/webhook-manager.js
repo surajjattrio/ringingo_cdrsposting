@@ -132,6 +132,28 @@ class WebhookManager {
   }
 
   /**
+   * Picks the reminder_date_time of the most recently scheduled follow-up
+   * @param {Array} followUps - follow_up documents joined on lead_management_uuid
+   * @returns {string} reminder_date_time of the latest follow-up, or "" if none
+   */
+  getLatestFollowUpReminder(followUps) {
+    if (!Array.isArray(followUps) || !followUps.length) return "";
+
+    let latestReminder = "";
+    let latestTime = 0;
+
+    for (const item of followUps) {
+      const time = new Date(item?.reminder_date_time).getTime();
+      if (time > latestTime) {
+        latestTime = time;
+        latestReminder = item?.reminder_date_time || "";
+      }
+    }
+
+    return latestReminder;
+  }
+
+  /**
    * Deliver voice broadcast data to all active webhooks for a tenant
    * Webhooks must have webhook_type = "voice_broadcast" to receive these events.
    * @param {Object} vbData - voicebroadcast_details document
@@ -880,6 +902,7 @@ class WebhookManager {
       campaignInbound,
       campaignOutbound,
       campaignBlended,
+      followUps,
     ] = await Promise.all([
       cdr.user_uuid
         ? db.collection("user").findOne({ uuid: cdr.user_uuid })
@@ -911,6 +934,12 @@ class WebhookManager {
       cdr.campaign_uuid
         ? db.collection("blended_campaign").findOne({ uuid: cdr.campaign_uuid })
         : null,
+      cdr.lead_uuid
+        ? db
+            .collection("follow_up")
+            .find({ lead_management_uuid: cdr.lead_uuid })
+            .toArray()
+        : [],
     ]);
 
     // (b) Dependent joins — user_group/lead_group need the user/lead resolved in (a);
@@ -1027,6 +1056,8 @@ class WebhookManager {
       agent_name: user?.fullname || user?.username || "",
       campaign_name: campaign?.name || "",
       comment: notes?.comment || "",
+      // Most recent reminder_date_time across the lead's follow_up records
+      follow_up_date: this.getLatestFollowUpReminder(followUps),
       disposition_root,
       disposition_sub,
       disposition_sub2,
