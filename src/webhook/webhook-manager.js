@@ -154,6 +154,22 @@ class WebhookManager {
   }
 
   /**
+   * Normalizes an Indian phone number to a bare 10-digit string — strips non-digits,
+   * strips a leading 91/+91 country code, then keeps the last 10 digits.
+   * @param {string} phone
+   * @returns {string} normalized number, or "" if phone is falsy
+   */
+  normalizeIndianNumber(phone) {
+    if (!phone) return "";
+    let num = String(phone).replace(/\D/g, "");
+    num = num.replace(/^\+?91/, "");
+    if (num.length > 10) {
+      num = num.slice(-10);
+    }
+    return num;
+  }
+
+  /**
    * Deliver voice broadcast data to all active webhooks for a tenant
    * Webhooks must have webhook_type = "voice_broadcast" to receive these events.
    * @param {Object} vbData - voicebroadcast_details document
@@ -1140,6 +1156,7 @@ class WebhookManager {
         cdr.direction === "inbound"
           ? cdr.caller_id_number || ""
           : cdr.destination_number || "",
+      mobile_number_normalized: this.normalizeIndianNumber(cdr.destination_number),
       agent_number:
         cdr.direction === "outbound"
           ? cdr.caller_id_number || ""
