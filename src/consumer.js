@@ -53,6 +53,8 @@ class MongoDBConsumer {
     this.processedCount = 0;
     this.failedCount = 0;
     this.webhookDeliveredCount = 0;
+    this.channel = null;
+    this.consumerTag = null;
 
     // CDR collections that should trigger webhooks
     this.cdrCollections = ["cdrs", "inbound_cdrs", "cdrs_summary", "missed_calls", "drop_calls"];
@@ -70,13 +72,20 @@ class MongoDBConsumer {
 
       const channel = rabbitMQ.getChannel();
 
+      if (channel === this.channel && this.consumerTag) {
+        logger.warn("[CONSUMER] start() called again for the same channel - skipping");
+        return;
+      }
+
+      this.channel = channel;
+
       logger.info("[CONSUMER] Starting message consumption", {
         queue: config.rabbitmq.queue,
         prefetch: channel.prefetch,
       });
 
       // Start consuming
-      await channel.consume(
+      const { consumerTag } = await channel.consume(
         config.rabbitmq.queue,
         async (msg) => {
           if (msg !== null) {
@@ -92,6 +101,7 @@ class MongoDBConsumer {
           noAck: false, // Manual acknowledgment
         }
       );
+      this.consumerTag = consumerTag;
 
       this.isConsuming = true;
       logger.success("[CONSUMER] Consumer started successfully");
@@ -467,12 +477,18 @@ class MongoDBConsumer {
    */
   async stop() {
     try {
-      this.isConsuming = false;
-      logger.info("[CONSUMER] Consumer stopped");
+      if (this.channel && this.consumerTag) {
+        await this.channel.cancel(this.consumerTag);
+      }
     } catch (error) {
-      logger.error("[CONSUMER] Error stopping consumer", {
+      logger.warn("[CONSUMER] Error cancelling consumer (channel likely already closed)", {
         error: error.message,
       });
+    } finally {
+      this.isConsuming = false;
+      this.consumerTag = null;
+      this.channel = null;
+      logger.info("[CONSUMER] Consumer stopped");
     }
   }
 

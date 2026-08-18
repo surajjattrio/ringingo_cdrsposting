@@ -22,34 +22,95 @@ async function checkMongoDB() {
     }
 }
 
+/**
+ * Passively check one queue's stats using its own short-lived temporary
+ * channel. A queue that doesn't exist yet (early boot) or any other
+ * checkQueue failure closes the channel it happened on (AMQP channel-level
+ * exception) - giving each queue its own channel means one missing/broken
+ * queue can't take the others down with it.
+ */
+async function checkQueueStats(queueName) {
+    let channel;
+    try {
+        channel = await rabbitMQ.connection.createChannel();
+        const info = await channel.checkQueue(queueName);
+        return { name: queueName, messages: info.messageCount, consumers: info.consumerCount };
+    } catch (error) {
+        return { name: queueName, error: error.message };
+    } finally {
+        if (channel) {
+            await channel.close().catch(() => {});
+        }
+    }
+}
+
 async function checkRabbitMQ() {
     try {
         if (!rabbitMQ.isConnected) {
             return { status: 'disconnected', error: 'Not connected' };
         }
 
-        // Open a temporary channel to check queue stats
-        const tempChannel = await rabbitMQ.connection.createChannel();
-        const mainQueue = await tempChannel.checkQueue(config.rabbitmq.queue);
-        const dlq = await tempChannel.checkQueue(config.rabbitmq.deadLetterQueue);
-        await tempChannel.close();
+        // Must match how webhook-uae-consumer.js builds its queue name exactly.
+        const uaeWebhookQueue = "_uae_" + config.webhooks.queue;
+
+        const [mainQueue, dlq, webhookQueue, uaeQueue] = await Promise.all([
+            checkQueueStats(config.rabbitmq.queue),
+            checkQueueStats(config.rabbitmq.deadLetterQueue),
+            checkQueueStats(config.webhooks.queue),
+            checkQueueStats(uaeWebhookQueue),
+        ]);
+
+        // Top-level status stays keyed on connection health, not consumer
+        // count - a brief zero-consumer window during reconnect is expected
+        // and must not flip the whole health check to unhealthy. Consumer
+        // liveness is reported separately below for a monitor to key off.
+        const consumingQueues = { main: mainQueue, webhook: webhookQueue, uae: uaeQueue };
+        const consumersHealthy = Object.values(consumingQueues).every(
+            (q) => !q.error && q.consumers >= 1
+        );
+        const consumerWarnings = Object.values(consumingQueues).flatMap((q) => {
+            if (q.error) return [`Queue ${q.name} could not be checked: ${q.error}`];
+            if (q.consumers === 0) return [`Queue ${q.name} has zero consumers`];
+            return [];
+        });
 
         return {
             status: 'connected',
             host: `${config.rabbitmq.host}:${config.rabbitmq.port}`,
             mainQueue: {
-                name: config.rabbitmq.queue,
-                messages: mainQueue.messageCount,
-                consumers: mainQueue.consumerCount,
+                name: mainQueue.name,
+                messages: mainQueue.messages,
+                consumers: mainQueue.consumers,
+                ...(mainQueue.error ? { error: mainQueue.error } : {}),
+            },
+            webhookQueue: {
+                name: webhookQueue.name,
+                messages: webhookQueue.messages,
+                consumers: webhookQueue.consumers,
+                ...(webhookQueue.error ? { error: webhookQueue.error } : {}),
+            },
+            uaeWebhookQueue: {
+                name: uaeQueue.name,
+                messages: uaeQueue.messages,
+                consumers: uaeQueue.consumers,
+                ...(uaeQueue.error ? { error: uaeQueue.error } : {}),
             },
             deadLetterQueue: {
-                name: config.rabbitmq.deadLetterQueue,
-                messages: dlq.messageCount,
-                warning: dlq.messageCount > 0,
+                name: dlq.name,
+                messages: dlq.messages,
+                warning: !dlq.error && dlq.messages > 0,
+                ...(dlq.error ? { error: dlq.error } : {}),
+            },
+            consumers: {
+                main: mainQueue.error ? null : mainQueue.consumers,
+                webhook: webhookQueue.error ? null : webhookQueue.consumers,
+                uae: uaeQueue.error ? null : uaeQueue.consumers,
+                allActive: consumersHealthy,
             },
             warnings: [
-                ...(mainQueue.messageCount > 1000 ? ['High queue size'] : []),
-                ...(dlq.messageCount > 0 ? ['Messages in dead letter queue'] : []),
+                ...(!mainQueue.error && mainQueue.messages > 1000 ? ['High queue size'] : []),
+                ...(!dlq.error && dlq.messages > 0 ? ['Messages in dead letter queue'] : []),
+                ...consumerWarnings,
             ],
         };
     } catch (error) {

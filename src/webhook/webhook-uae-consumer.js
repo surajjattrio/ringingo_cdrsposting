@@ -13,6 +13,8 @@ class UAEWebhookConsumer {
     this.isConsuming = false;
     this.processedCount = 0;
     this.failedCount = 0;
+    this.channel = null;
+    this.consumerTag = null;
   }
 
   /**
@@ -28,12 +30,19 @@ class UAEWebhookConsumer {
       const channel = rabbitMQ.getChannel();
       const uaeQueue = "_uae_" + config.webhooks.queue;
 
+      if (channel === this.channel && this.consumerTag) {
+        logger.warn("[UAE_WEBHOOK_CONSUMER] start() called again for the same channel - skipping");
+        return;
+      }
+
+      this.channel = channel;
+
       logger.info("[UAE_WEBHOOK_CONSUMER] Starting UAE webhook task consumption", {
         queue: uaeQueue,
       });
 
       // Start consuming
-      await channel.consume(
+      const { consumerTag } = await channel.consume(
         uaeQueue,
         async (msg) => {
           if (msg !== null) {
@@ -44,6 +53,7 @@ class UAEWebhookConsumer {
           noAck: false, // Manual acknowledgment
         }
       );
+      this.consumerTag = consumerTag;
 
       this.isConsuming = true;
       logger.success("[UAE_WEBHOOK_CONSUMER] UAE Webhook consumer started successfully");
@@ -92,8 +102,20 @@ class UAEWebhookConsumer {
    * Stop consuming
    */
   async stop() {
-    this.isConsuming = false;
-    logger.info("[UAE_WEBHOOK_CONSUMER] UAE Webhook consumer stopped");
+    try {
+      if (this.channel && this.consumerTag) {
+        await this.channel.cancel(this.consumerTag);
+      }
+    } catch (error) {
+      logger.warn("[UAE_WEBHOOK_CONSUMER] Error cancelling consumer (channel likely already closed)", {
+        error: error.message,
+      });
+    } finally {
+      this.isConsuming = false;
+      this.consumerTag = null;
+      this.channel = null;
+      logger.info("[UAE_WEBHOOK_CONSUMER] UAE Webhook consumer stopped");
+    }
   }
 
   /**
